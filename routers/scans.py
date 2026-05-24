@@ -189,6 +189,26 @@ def get_scan(scan_id: int):
     return scan
 
 
+@router.delete("/{scan_id}")
+def delete_scan(scan_id: int):
+    db = _load()
+    if str(scan_id) not in db["scans"]:
+        raise HTTPException(status_code=404, detail="Scan introuvable")
+    del db["scans"][str(scan_id)]
+    _save(db)
+    return {"deleted": scan_id}
+
+
+@router.post("/{scan_id}/rerun")
+def rerun_scan(scan_id: int):
+    db   = _load()
+    scan = db["scans"].get(str(scan_id))
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan introuvable")
+    body = ScanRequest(target=scan["target"], asset_type=scan["type"])
+    return launch_scan(body)
+
+
 @router.post("/{scan_id}/ask")
 def ask_ai(scan_id: int, body: AskRequest):
     db   = _load()
