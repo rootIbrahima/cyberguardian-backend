@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Données utilisateur
+data/scans.json
+
+# Clones temporaires (github_tools)
+cg_gh_*/
+cg_bandit_*/
+cg_truffle_*/
+
+# PDF générés localement
+*.pdf
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
