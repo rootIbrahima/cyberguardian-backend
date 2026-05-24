@@ -1,5 +1,11 @@
 import re
+import warnings
+
 import httpx
+
+# Suppress urllib3 InsecureRequestWarning: banner fetching targets arbitrary hosts
+# that may use self-signed or expired certificates — verify=False is intentional.
+warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
 TLS_CVES = {
     "TLSv1": [
@@ -38,12 +44,12 @@ def _get_server_banner(target: str) -> str:
                 f"{scheme}://{host}",
                 timeout=5,
                 follow_redirects=True,
-                verify=False,
+                verify=False,  # nosec B501 — intentional: scanner must reach hosts with invalid certs
             )
             banner = resp.headers.get("server", "")
             if banner:
                 return banner
-        except Exception:
+        except Exception:  # nosec B112 — skip scheme (https/http) on connection failure
             continue
     return ""
 

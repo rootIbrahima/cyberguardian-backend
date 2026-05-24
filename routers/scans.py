@@ -27,7 +27,7 @@ def _load() -> dict:
     if DB_FILE.exists():
         try:
             return json.loads(DB_FILE.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception:  # nosec B110 — return empty store on any JSON/IO error
             pass
     return {"counter": 0, "scans": {}}
 
