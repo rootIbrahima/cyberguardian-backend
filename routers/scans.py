@@ -1,9 +1,14 @@
 import json
 import httpx
-from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from database import get_db, SessionLocal
+from models import Scan, User
+from auth import get_current_user, get_current_user_optional
 from tools.check_ssl import check_ssl
 from tools.check_cve import check_tls_cves, check_service_cves
 from tools.generate_pdf import generate_scan_pdf
@@ -11,37 +16,41 @@ from tools.github_tools import scan_github
 
 OLLAMA_URL   = "https://fromager.unchk.sn:11435"
 OLLAMA_KEY   = "partner-2c58610f55694bcaa6b83a15635bf348"
-#OLLAMA_MODEL = "llama3:latest"
 OLLAMA_MODEL = "llama3:latest"
-
-
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
-DB_FILE = Path(__file__).parent.parent / "data" / "scans.json"
+MOIS = ["jan", "fev", "mar", "avr", "mai", "jun",
+        "jul", "aou", "sep", "oct", "nov", "dec"]
 
 
-# ── Persistance fichier JSON ──────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _load() -> dict:
-    if DB_FILE.exists():
-        try:
-            return json.loads(DB_FILE.read_text(encoding="utf-8"))
-        except Exception:  # nosec B110 — return empty store on any JSON/IO error
-            pass
-    return {"counter": 0, "scans": {}}
+def _now() -> str:
+    now = datetime.now()
+    return f"{now.day:02d} {MOIS[now.month - 1]}. {now.year}, {now.strftime('%H:%M')}"
 
 
-def _save(db: dict):
-    DB_FILE.parent.mkdir(parents=True, exist_ok=True)
-    DB_FILE.write_text(json.dumps(db, ensure_ascii=False, indent=2), encoding="utf-8")
+def _detect_asset_type(target: str) -> str:
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(target.strip())
+        if ip.is_private:
+            if str(ip).startswith("192.168."):
+                return "IP privée — probablement un routeur ou équipement réseau domestique"
+            if str(ip).startswith("10."):
+                return "IP privée — réseau d'entreprise interne"
+            return "IP privée — équipement réseau interne"
+        return "IP publique — serveur accessible sur internet"
+    except ValueError:
+        return "Nom de domaine public"
 
 
 # ── Modèles ───────────────────────────────────────────────────────────────────
 
 class ScanRequest(BaseModel):
-    target: str
-    asset_type: str  # domain | ip | url | github
+    target:     str
+    asset_type: str   # domain | ip | url | github
 
 
 class AskRequest(BaseModel):
@@ -51,14 +60,13 @@ class AskRequest(BaseModel):
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("")
-def launch_scan(body: ScanRequest):
-    db = _load()
-    db["counter"] += 1
-    scan_id = db["counter"]
-
+def launch_scan(
+    body:         ScanRequest,
+    db:           Session      = Depends(get_db),
+    current_user: User | None  = Depends(get_current_user_optional),
+):
     results = {}
     issues  = []
-
     all_cves      = []
     server_banner = ""
 
@@ -82,11 +90,12 @@ def launch_scan(body: ScanRequest):
         }
         issues = ssl.issues
 
-        tls_cves                  = check_tls_cves(ssl.tls_version or "", ssl.cipher_suite or "")
-        server_banner, svc_cves   = check_service_cves(body.target)
-        all_cves                  = tls_cves + svc_cves
-        results["cves"]           = all_cves
-        results["server_banner"]  = server_banner
+        tls_cves                 = check_tls_cves(ssl.tls_version or "", ssl.cipher_suite or "")
+        server_banner, svc_cves  = check_service_cves(body.target)
+        all_cves                 = tls_cves + svc_cves
+        results["cves"]          = all_cves
+        results["server_banner"] = server_banner
+        total_score = results["ssl"].get("score", 0)
 
     elif body.asset_type == "github":
         gh = scan_github(body.target)
@@ -118,107 +127,127 @@ def launch_scan(body: ScanRequest):
             }
             for f in gh["trufflehog"].get("findings", [])
         ]
-
-    total_score = total_score if body.asset_type == "github" else results.get("ssl", {}).get("score", 0)
+    else:
+        raise HTTPException(status_code=400, detail="Type d'actif invalide")
 
     type_labels = {"domain": "Domaine", "ip": "IP", "url": "URL", "github": "GitHub"}
 
-    scan = {
-        "id":        scan_id,
-        "target":    body.target,
-        "type":      body.asset_type,
-        "typeLabel": type_labels.get(body.asset_type, "Domaine"),
-        "score":     total_score,
-        "status":    "completed",
-        "vulns":     len(issues),
-        "cve":       len(all_cves),
-        "date":      _now(),
-        "results":   results,
-        "issues":    issues,
-    }
-
-    db["scans"][str(scan_id)] = scan
-    _save(db)
-    return scan
+    scan = Scan(
+        user_id    = current_user.id if current_user else None,
+        target     = body.target,
+        type       = body.asset_type,
+        type_label = type_labels.get(body.asset_type, "Domaine"),
+        score      = total_score,
+        status     = "completed",
+        vulns      = len(issues),
+        cve        = len(all_cves),
+        date       = _now(),
+        results    = results,
+        issues     = issues,
+        conversations = [],
+    )
+    db.add(scan)
+    db.commit()
+    db.refresh(scan)
+    return scan.to_dict()
 
 
 @router.get("")
-def list_scans():
-    db = _load()
-    scans = list(db["scans"].values())
-    scans.sort(key=lambda s: s["id"], reverse=True)
-    return scans
+def list_scans(
+    db:           Session     = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    q = db.query(Scan)
+    # Admin voit tous les scans ; client ne voit que les siens
+    if current_user and current_user.role != "admin":
+        q = q.filter(Scan.user_id == current_user.id)
+    scans = q.order_by(Scan.id.desc()).all()
+    return [s.to_dict() for s in scans]
 
 
 @router.get("/quota")
-def get_quota():
-    return {"used": 0, "limit": 9999}
+def get_quota(
+    db:           Session     = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    if current_user:
+        used = db.query(Scan).filter(Scan.user_id == current_user.id).count()
+    else:
+        used = db.query(Scan).count()
+    return {"used": used, "limit": 9999}
 
 
 @router.get("/{scan_id}/status")
-def get_status(scan_id: int):
-    db   = _load()
-    scan = db["scans"].get(str(scan_id))
+def get_status(scan_id: int, db: Session = Depends(get_db)):
+    scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan introuvable")
-    return {"id": scan_id, "status": scan["status"]}
+    return {"id": scan_id, "status": scan.status}
 
 
 @router.get("/{scan_id}/pdf")
-def download_pdf(scan_id: int):
-    db   = _load()
-    scan = db["scans"].get(str(scan_id))
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan introuvable")
-
-    ai_explanation = _generate_simple_explanation(scan)
-    pdf_bytes = generate_scan_pdf(scan, ai_explanation=ai_explanation)
-    filename  = f"cyberguardian-{scan['target']}.pdf"
+def download_pdf(
+    scan_id:      int,
+    db:           Session     = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    scan = _get_scan_or_404(scan_id, db, current_user)
+    scan_dict      = scan.to_dict()
+    ai_explanation = _generate_simple_explanation(scan_dict)
+    pdf_bytes      = generate_scan_pdf(scan_dict, ai_explanation=ai_explanation)
+    filename       = f"cyberguardian-{scan.target}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
+
 @router.get("/{scan_id}")
-def get_scan(scan_id: int):
-    db   = _load()
-    scan = db["scans"].get(str(scan_id))
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan introuvable")
-    return scan
+def get_scan(
+    scan_id:      int,
+    db:           Session     = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    return _get_scan_or_404(scan_id, db, current_user).to_dict()
 
 
 @router.delete("/{scan_id}")
-def delete_scan(scan_id: int):
-    db = _load()
-    if str(scan_id) not in db["scans"]:
-        raise HTTPException(status_code=404, detail="Scan introuvable")
-    del db["scans"][str(scan_id)]
-    _save(db)
+def delete_scan(
+    scan_id:      int,
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(get_current_user),
+):
+    scan = _get_scan_or_404(scan_id, db, current_user)
+    db.delete(scan)
+    db.commit()
     return {"deleted": scan_id}
 
 
 @router.post("/{scan_id}/rerun")
-def rerun_scan(scan_id: int):
-    db   = _load()
-    scan = db["scans"].get(str(scan_id))
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan introuvable")
-    body = ScanRequest(target=scan["target"], asset_type=scan["type"])
-    return launch_scan(body)
+def rerun_scan(
+    scan_id:      int,
+    db:           Session     = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    scan = _get_scan_or_404(scan_id, db, current_user)
+    body = ScanRequest(target=scan.target, asset_type=scan.type)
+    return launch_scan(body, db, current_user)
 
 
 @router.post("/{scan_id}/ask")
-def ask_ai(scan_id: int, body: AskRequest):
-    db   = _load()
-    scan = db["scans"].get(str(scan_id))
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan introuvable")
+def ask_ai(
+    scan_id:      int,
+    body:         AskRequest,
+    db:           Session     = Depends(get_db),
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    scan      = _get_scan_or_404(scan_id, db, current_user)
+    scan_dict = scan.to_dict()
 
-    results = scan.get("results", {})
-    issues  = scan.get("issues", [])
-    is_gh   = scan.get("type") == "github"
+    results = scan_dict.get("results", {})
+    issues  = scan_dict.get("issues", [])
+    is_gh   = scan_dict.get("type") == "github"
 
     if is_gh:
         info      = results.get("github_info", {})
@@ -230,50 +259,59 @@ def ask_ai(scan_id: int, body: AskRequest):
         gh_lang   = results.get("langage") or info.get("language") or "N/A"
         bandit_h  = sum(1 for f in bandit.get("findings", []) if f.get("severity") == "HIGH")
         bandit_m  = sum(1 for f in bandit.get("findings", []) if f.get("severity") == "MEDIUM")
-        cve_list  = "; ".join(f"{f['package']} {f['version']} ({f['cve']})" for f in safety.get("findings", [])[:5]) or "aucune"
-        npm_list  = "; ".join(f"{f['package']} ({f['severity']})" for f in npm_audit.get("findings", [])[:5]) or "aucune"
+        cve_list  = "; ".join(
+            f"{f['package']} {f['version']} ({f['cve']})"
+            for f in safety.get("findings", [])[:5]
+        ) or "aucune"
+        npm_list  = "; ".join(
+            f"{f['package']} ({f['severity']})"
+            for f in npm_audit.get("findings", [])[:5]
+        ) or "aucune"
         secrets   = len(truffle.get("findings", []))
-        score_label = (f"{scan['score']}/{score_max} — excellent, aucune faille détectée"
-                       if scan['score'] == score_max
-                       else f"{scan['score']}/{score_max}")
-        context = f"""Tu es un expert en cybersécurité senior qui conseille des entreprises sénégalaises.
-
-Dépôt GitHub analysé : {scan['target']}
-Langage principal : {gh_lang}
-Score GitHub : {score_label}
-Visibilité : {info.get('visibility', 'N/A')} | Licence : {info.get('license', 'N/A')}
-Bandit (Python statique) : {len(bandit.get('findings', []))} findings ({bandit_h} HIGH, {bandit_m} MEDIUM)
-Safety (CVE dépendances Python) : {len(safety.get('findings', []))} CVE — {cve_list}
-npm audit (CVE Node.js) : {len(npm_audit.get('findings', []))} vulnérabilités — {npm_list}
-Secrets exposés : {secrets} secret(s) détecté(s)
-
-RÈGLES :
-- Priorise les secrets exposés (révoquer immédiatement) et les CVE CRITICAL/HIGH.
-- Pour chaque CVE Python, recommande la commande pip install --upgrade.
-- Pour chaque CVE npm, recommande npm audit fix ou la version corrigée.
-- Pour Bandit HIGH, explique le risque avec un exemple de code corrigé.
-- Réponds en français simple, concis, sans jargon inutile.
-
-Question de l'utilisateur : {body.question}"""
+        score_val = scan_dict["score"]
+        score_label = (
+            f"{score_val}/{score_max} — excellent, aucune faille détectée"
+            if score_val == score_max else f"{score_val}/{score_max}"
+        )
+        context = (
+            f"Tu es un expert en cybersécurité senior qui conseille des entreprises sénégalaises.\n\n"
+            f"Dépôt GitHub analysé : {scan_dict['target']}\n"
+            f"Langage principal : {gh_lang}\n"
+            f"Score GitHub : {score_label}\n"
+            f"Visibilité : {info.get('visibility', 'N/A')} | Licence : {info.get('license', 'N/A')}\n"
+            f"Bandit (Python statique) : {len(bandit.get('findings', []))} findings ({bandit_h} HIGH, {bandit_m} MEDIUM)\n"
+            f"Safety (CVE dépendances Python) : {len(safety.get('findings', []))} CVE — {cve_list}\n"
+            f"npm audit (CVE Node.js) : {len(npm_audit.get('findings', []))} vulnérabilités — {npm_list}\n"
+            f"Secrets exposés : {secrets} secret(s) détecté(s)\n\n"
+            f"RÈGLES :\n"
+            f"- Priorise les secrets exposés et les CVE CRITICAL/HIGH.\n"
+            f"- Pour chaque CVE Python, recommande pip install --upgrade.\n"
+            f"- Pour chaque CVE npm, recommande npm audit fix.\n"
+            f"- Réponds en français simple, concis.\n\n"
+            f"Question de l'utilisateur : {body.question}"
+        )
     else:
         ssl        = results.get("ssl", {})
-        asset_type = _detect_asset_type(scan['target'])
-        context = f"""Tu es un expert en cybersécurité senior qui conseille des entreprises sénégalaises.
-
-Actif analysé : {scan['target']}
-Type d'actif détecté : {asset_type}
-Score de sécurité : {scan['score']}/100
-SSL/TLS : valide={ssl.get('valid')}, expiré={ssl.get('expired')}, auto-signé={ssl.get('self_signed')}, version={ssl.get('tls_version')}, grade={ssl.get('grade')}, score={ssl.get('score', 0)}/25, expiration={ssl.get('expiry_date')} ({ssl.get('days_until_expiry')} jours restants), émis par={ssl.get('issued_by')}
-Problèmes ({len(issues)}) : {'; '.join(f"[{i['severity']}] {i['title']}" for i in issues) or 'aucun'}
-
-RÈGLES IMPORTANTES :
-- Si l'actif est une IP privée (192.168.x.x, 10.x.x.x, 172.16-31.x.x), explique clairement que CyberGuardian est conçu pour analyser des actifs publics accessibles sur internet, pas des équipements réseau internes (routeurs, NAS, caméras). Donne quand même des conseils adaptés à l'équipement détecté.
-- Ne recommande JAMAIS "redémarrez le serveur" ou "Let's Encrypt" pour une IP privée ou un équipement réseau interne.
-- Pour un domaine public, recommande Let's Encrypt ou les hébergeurs locaux (OVH, Sonatel, Arc Informatique).
-- Adapte tes recommandations au contexte sénégalais quand c'est pertinent.
-- Réponds en français simple, concis, sans jargon inutile.
-
-Question de l'utilisateur : {body.question}"""
+        asset_type = _detect_asset_type(scan_dict["target"])
+        problems   = "; ".join("[" + i["severity"] + "] " + i["title"] for i in issues) or "aucun"
+        context = (
+            "Tu es un expert en cybersécurité senior qui conseille des entreprises sénégalaises.\n\n"
+            f"Actif analysé : {scan_dict['target']}\n"
+            f"Type d'actif détecté : {asset_type}\n"
+            f"Score de sécurité : {scan_dict['score']}/100\n"
+            f"SSL/TLS : valide={ssl.get('valid')}, expiré={ssl.get('expired')}, "
+            f"auto-signé={ssl.get('self_signed')}, version={ssl.get('tls_version')}, "
+            f"grade={ssl.get('grade')}, score={ssl.get('score', 0)}/25, "
+            f"expiration={ssl.get('expiry_date')} ({ssl.get('days_until_expiry')} jours restants), "
+            f"émis par={ssl.get('issued_by')}\n"
+            f"Problèmes ({len(issues)}) : {problems}\n\n"
+            "RÈGLES IMPORTANTES :\n"
+            "- Si IP privée, explique que CyberGuardian analyse des actifs publics.\n"
+            "- Pour un domaine public, recommande Let's Encrypt.\n"
+            "- Adapte tes recommandations au contexte sénégalais.\n"
+            "- Réponds en français simple, concis.\n\n"
+            f"Question de l'utilisateur : {body.question}"
+        )
 
     def stream():
         tokens = []
@@ -289,7 +327,7 @@ Question de l'utilisateur : {body.question}"""
                 for line in resp.iter_lines():
                     if not line:
                         continue
-                    data = json.loads(line)
+                    data  = json.loads(line)
                     token = data.get("response", "")
                     if token:
                         tokens.append(token)
@@ -300,7 +338,6 @@ Question de l'utilisateur : {body.question}"""
                         yield f"data: {json.dumps({'done': True})}\n\n"
         except Exception as e:
             import traceback
-            print(f"[AI ERROR] {type(e).__name__}: {e}")
             traceback.print_exc()
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
@@ -311,39 +348,31 @@ Question de l'utilisateur : {body.question}"""
     )
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Helpers internes ──────────────────────────────────────────────────────────
 
-def _now() -> str:
-    from datetime import datetime
-    MOIS = ["jan", "fev", "mar", "avr", "mai", "jun",
-            "jul", "aou", "sep", "oct", "nov", "dec"]
-    now = datetime.now()
-    return f"{now.day:02d} {MOIS[now.month - 1]}. {now.year}, {now.strftime('%H:%M')}"
-
-
-def _detect_asset_type(target: str) -> str:
-    import ipaddress
-    try:
-        ip = ipaddress.ip_address(target.strip())
-        if ip.is_private:
-            if str(ip).startswith("192.168."):
-                return "IP privée — probablement un routeur ou équipement réseau domestique"
-            if str(ip).startswith("10."):
-                return "IP privée — réseau d'entreprise interne"
-            return "IP privée — équipement réseau interne"
-        return "IP publique — serveur accessible sur internet"
-    except ValueError:
-        return "Nom de domaine public"
+def _get_scan_or_404(scan_id: int, db: Session, current_user: User | None) -> Scan:
+    scan = db.query(Scan).filter(Scan.id == scan_id).first()
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan introuvable")
+    # Admin voit tout ; client ne voit que ses propres scans
+    if current_user and current_user.role != "admin":
+        if scan.user_id and scan.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Accès refusé")
+    return scan
 
 
 def _save_conversation(scan_id: int, question: str, answer: str):
-    db   = _load()
-    scan = db["scans"].get(str(scan_id), {})
-    if "conversations" not in scan:
-        scan["conversations"] = []
-    scan["conversations"].append({"question": question, "answer": answer, "date": _now()})
-    db["scans"][str(scan_id)] = scan
-    _save(db)
+    """Ouvre une session dédiée pour sauvegarder la conversation (contexte streaming)."""
+    db = SessionLocal()
+    try:
+        scan = db.query(Scan).filter(Scan.id == scan_id).first()
+        if scan:
+            convs = list(scan.conversations or [])
+            convs.append({"question": question, "answer": answer, "date": _now()})
+            scan.conversations = convs
+            db.commit()
+    finally:
+        db.close()
 
 
 def _generate_simple_explanation(scan: dict) -> str:
@@ -351,50 +380,47 @@ def _generate_simple_explanation(scan: dict) -> str:
     is_github = scan.get("type") == "github"
 
     if is_github:
-        score_max  = results.get("score_max", 30)
-        gh_lang    = results.get("langage") or results.get("github_info", {}).get("language") or "N/A"
-        bandit     = results.get("bandit", {})
-        safety     = results.get("safety", {})
-        truffle    = results.get("trufflehog", {})
-        npm_audit  = results.get("npm_audit") or {}
-        secrets    = len(truffle.get("findings", []))
-        score_label = (f"{scan['score']}/{score_max} — score parfait, aucune faille détectée"
-                       if scan['score'] == score_max
-                       else f"{scan['score']}/{score_max}")
-        prompt = f"""Tu es un expert en cybersécurité. Explique les résultats de ce scan GitHub à une personne non-informaticienne.
-
-Dépôt : {scan['target']}
-Langage : {gh_lang}
-Score GitHub : {score_label}
-Bandit : {len(bandit.get('findings', []))} problème(s) de code détecté(s)
-Safety / npm audit : {len(safety.get('findings', [])) + len(npm_audit.get('findings', []))} CVE détectée(s)
-Secrets exposés : {secrets} secret(s) détecté(s)
-
-RÈGLES :
-- Si score parfait ({score_max}/{score_max}), rassure mais recommande une surveillance régulière.
-- Si des secrets sont exposés, c'est la priorité absolue — explique le risque en termes simples.
-- Français simple, 5 à 7 phrases max, tutoie le lecteur."""
+        score_max = results.get("score_max", 30)
+        gh_lang   = results.get("langage") or results.get("github_info", {}).get("language") or "N/A"
+        bandit    = results.get("bandit", {})
+        safety    = results.get("safety", {})
+        truffle   = results.get("trufflehog", {})
+        npm_audit = results.get("npm_audit") or {}
+        secrets   = len(truffle.get("findings", []))
+        score_val = scan["score"]
+        score_label = (
+            f"{score_val}/{score_max} — score parfait, aucune faille détectée"
+            if score_val == score_max else f"{score_val}/{score_max}"
+        )
+        prompt = (
+            f"Tu es un expert en cybersécurité. Explique les résultats de ce scan GitHub "
+            f"à une personne non-informaticienne.\n\n"
+            f"Dépôt : {scan['target']}\nLangage : {gh_lang}\nScore GitHub : {score_label}\n"
+            f"Bandit : {len(bandit.get('findings', []))} problème(s) de code détecté(s)\n"
+            f"Safety / npm audit : {len(safety.get('findings', [])) + len(npm_audit.get('findings', []))} CVE détectée(s)\n"
+            f"Secrets exposés : {secrets} secret(s) détecté(s)\n\n"
+            f"RÈGLES :\n"
+            f"- Si score parfait ({score_max}/{score_max}), rassure mais recommande une surveillance.\n"
+            f"- Si des secrets sont exposés, c'est la priorité absolue.\n"
+            f"- Français simple, 5 à 7 phrases max, tutoie le lecteur."
+        )
     else:
         ssl        = results.get("ssl", {})
         issues     = scan.get("issues", [])
-        asset_type = _detect_asset_type(scan['target'])
-        prompt = f"""Tu es un expert en cybersécurité. Tu dois expliquer les résultats d'un scan à une personne non-informaticienne.
-
-Actif analysé : {scan['target']}
-Type d'actif : {asset_type}
-Score : {scan['score']}/100
-Certificat SSL valide : {ssl.get('valid', '?')}
-Certificat expiré : {ssl.get('expired', '?')}
-Auto-signé : {ssl.get('self_signed', '?')}
-Version TLS : {ssl.get('tls_version', '?')}
-Grade : {ssl.get('grade', '?')}
-Expiration : {ssl.get('expiry_date', '?')} ({ssl.get('days_until_expiry', '?')} jours restants)
-Problèmes : {chr(10).join(f'- {i["title"]}' for i in issues) if issues else 'Aucun'}
-
-RÈGLES :
-- Si c'est une IP privée (192.168.x.x, 10.x.x.x), explique que cet outil analyse des actifs publics sur internet, pas des équipements internes. Adapte tes conseils à l'équipement (routeur, NAS, etc.).
-- Si c'est un domaine ou une IP publique, explique le score et les actions concrètes à faire.
-- Français simple, 5 à 8 phrases max, sans jargon. Tutoie le lecteur."""
+        asset_type = _detect_asset_type(scan["target"])
+        issues_str = "\n".join("- " + i["title"] for i in issues) if issues else "Aucun"
+        prompt = (
+            "Tu es un expert en cybersécurité. Explique les résultats d'un scan à une personne non-informaticienne.\n\n"
+            f"Actif analysé : {scan['target']}\nType d'actif : {asset_type}\n"
+            f"Score : {scan['score']}/100\nCertificat SSL valide : {ssl.get('valid', '?')}\n"
+            f"Certificat expiré : {ssl.get('expired', '?')}\nAuto-signé : {ssl.get('self_signed', '?')}\n"
+            f"Version TLS : {ssl.get('tls_version', '?')}\nGrade : {ssl.get('grade', '?')}\n"
+            f"Expiration : {ssl.get('expiry_date', '?')} ({ssl.get('days_until_expiry', '?')} jours restants)\n"
+            f"Problèmes : {issues_str}\n\n"
+            "RÈGLES :\n"
+            "- Si IP privée, explique que cet outil analyse des actifs publics.\n"
+            "- Français simple, 5 à 8 phrases max, sans jargon. Tutoie le lecteur."
+        )
 
     try:
         resp = httpx.post(
