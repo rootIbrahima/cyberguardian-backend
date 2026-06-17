@@ -1,0 +1,49 @@
+name: Pipeline de sécurité — backend
+
+# DevSecOps (shift-left) : à chaque push et pull request, on vérifie que le
+# code de CyberGuardian est lui-même exempt de failles connues. Le build
+# échoue si une vulnérabilité ou un secret exposé est détecté — la plateforme
+# ne se déploie jamais avec une faille connue.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  sast:
+    name: Analyse statique du code (Bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install bandit
+      - name: Bandit — failles du code Python
+        run: bandit -r . --severity-level medium --confidence-level medium
+
+  dependencies:
+    name: Dépendances vulnérables (Safety)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Safety < 3 : analyse hors-ligne sans compte requis
+      - run: pip install "safety<3"
+      - name: Safety — CVE des dépendances Python
+        run: safety check -r requirements.txt
+
+  secrets:
+    name: Secrets exposés (TruffleHog)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # historique complet : détecte aussi les secrets des anciens commits
+      - name: TruffleHog — clés et mots de passe exposés
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/repo" \
+            trufflesecurity/trufflehog:latest \
+            filesystem /repo --only-verified --fail
