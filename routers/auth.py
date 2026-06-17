@@ -61,7 +61,9 @@ def register(body: RegisterBody, db: Session = Depends(get_db)):
         email         = body.email,
         name          = body.name,
         password_hash = auth_utils.hash_password(body.password),
-        role          = body.role if body.role in ("client", "expert") else "client",
+        # Toujours client : le rôle expert s'obtient uniquement par candidature
+        # validée par l'admin (CDC §4.2), jamais à l'inscription.
+        role          = "client",
         created_at    = datetime.now(timezone.utc).isoformat(),
     )
     db.add(user)

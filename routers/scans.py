@@ -1,4 +1,6 @@
 import json
+from dataclasses import asdict
+
 import httpx
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,16 +9,19 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db, SessionLocal
-from models import Scan, User
+from models import Conversation, Scan, User
 from auth import get_current_user, get_current_user_optional
+from tools.check_dns import check_dns
+from tools.check_whois import check_whois
+from tools.check_epss import enrich_cves
 from tools.check_ssl import check_ssl
 from tools.check_cve import check_tls_cves, check_service_cves
+from tools.scan_headers import scan_headers
+from tools.calculate_score import calculate_score
 from tools.generate_pdf import generate_scan_pdf
 from tools.github_tools import scan_github
 
-OLLAMA_URL   = "https://fromager.unchk.sn:11435"
-OLLAMA_KEY   = "partner-2c58610f55694bcaa6b83a15635bf348"
-OLLAMA_MODEL = "llama3:latest"
+from config import OLLAMA_URL, OLLAMA_KEY, OLLAMA_MODEL
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -92,13 +97,35 @@ def launch_scan(
 
         tls_cves                 = check_tls_cves(ssl.tls_version or "", ssl.cipher_suite or "")
         server_banner, svc_cves  = check_service_cves(body.target)
-        all_cves                 = tls_cves + svc_cves
+        all_cves                 = enrich_cves(tls_cves + svc_cves, id_key="id")
         results["cves"]          = all_cves
         results["server_banner"] = server_banner
-        total_score = results["ssl"].get("score", 0)
+
+        headers = scan_headers(body.target)
+        results["headers"] = asdict(headers)
+        issues = issues + headers.issues
+
+        score_parts = {"ssl": ssl.score, "headers": headers.score}
+
+        # DNS et WHOIS n'ont de sens que pour un domaine, pas une IP brute
+        if body.asset_type in ("domain", "url"):
+            dns = check_dns(body.target)
+            results["dns"] = asdict(dns)
+            issues = issues + dns.issues
+            score_parts["dns"] = dns.score
+
+            whois = check_whois(body.target)
+            results["whois"] = asdict(whois)
+            issues = issues + whois.issues
+
+        score_detail            = calculate_score(score_parts)
+        results["score_detail"] = score_detail
+        total_score             = score_detail["score"]
 
     elif body.asset_type == "github":
         gh = scan_github(body.target)
+        # Enrichit les CVE de dépendances (Safety) avec l'EPSS avant stockage
+        enrich_cves(gh["safety"].get("findings", []), id_key="cve")
         results["github_info"] = gh["github_info"]
         results["bandit"]      = gh["bandit"]
         results["safety"]      = gh["safety"]
@@ -158,8 +185,28 @@ def list_scans(
     current_user: User | None = Depends(get_current_user_optional),
 ):
     q = db.query(Scan)
-    # Admin voit tous les scans ; client ne voit que les siens
-    if current_user and current_user.role != "admin":
+    # Admin voit tous les scans ; client ne voit que les siens ;
+    # un expert voit aussi les scans partagés via une mission niveau 3 active
+    if current_user and current_user.role == "expert":
+        from routers.messages import mission_active
+        convs = (
+            db.query(Conversation)
+            .filter(Conversation.expert_id == current_user.id, Conversation.level >= 3)
+            .all()
+        )
+        shared_ids = []
+        for c in convs:
+            if mission_active(c):
+                shared = (
+                    db.query(Scan)
+                    .filter(Scan.user_id == c.client_id, Scan.target == c.subject)
+                    .order_by(Scan.id.desc())
+                    .first()
+                )
+                if shared:
+                    shared_ids.append(shared.id)
+        q = q.filter((Scan.user_id == current_user.id) | Scan.id.in_(shared_ids))
+    elif current_user and current_user.role != "admin":
         q = q.filter(Scan.user_id == current_user.id)
     scans = q.order_by(Scan.id.desc()).all()
     return [s.to_dict() for s in scans]
@@ -292,22 +339,44 @@ def ask_ai(
         )
     else:
         ssl        = results.get("ssl", {})
+        cves       = results.get("cves", [])
+        server     = results.get("server_banner", "")
         asset_type = _detect_asset_type(scan_dict["target"])
         problems   = "; ".join("[" + i["severity"] + "] " + i["title"] for i in issues) or "aucun"
+        dns_line   = _dns_summary(results)
+        whois_line = _whois_summary(results)
+        headers_line = _headers_summary(results)
+        cve_critical = [c for c in cves if c.get("severity", "").upper() in ("CRITICAL", "CRITIQUE")]
+        cve_high     = [c for c in cves if c.get("severity", "").upper() in ("HIGH", "HAUT")]
+        cve_details  = "\n".join(
+            "  - " + c.get("id", "?") + " CVSS=" + str(c.get("cvss", "?")) +
+            (" EPSS=" + str(round((c.get("epss") or 0) * 100, 1)) + "%" if c.get("epss") is not None else "") +
+            (" priorité=" + c["priority"] if c.get("priority") else "") +
+            " (" + c.get("severity", "?") + ") : " + (c.get("title") or "")[:120]
+            for c in cves[:10]
+        ) or "  Aucune CVE détectée"
         context = (
             "Tu es un expert en cybersécurité senior qui conseille des entreprises sénégalaises.\n\n"
             f"Actif analysé : {scan_dict['target']}\n"
             f"Type d'actif détecté : {asset_type}\n"
             f"Score de sécurité : {scan_dict['score']}/100\n"
+            f"Serveur détecté : {server or 'N/A'}\n"
             f"SSL/TLS : valide={ssl.get('valid')}, expiré={ssl.get('expired')}, "
             f"auto-signé={ssl.get('self_signed')}, version={ssl.get('tls_version')}, "
             f"grade={ssl.get('grade')}, score={ssl.get('score', 0)}/25, "
             f"expiration={ssl.get('expiry_date')} ({ssl.get('days_until_expiry')} jours restants), "
             f"émis par={ssl.get('issued_by')}\n"
-            f"Problèmes ({len(issues)}) : {problems}\n\n"
+            f"{dns_line}"
+            f"{whois_line}"
+            f"{headers_line}"
+            f"CVE détectées ({len(cves)}) dont {len(cve_critical)} CRITIQUE et {len(cve_high)} HAUT :\n"
+            f"{cve_details}\n"
+            f"Problèmes détectés ({len(issues)}) : {problems}\n\n"
             "RÈGLES IMPORTANTES :\n"
+            "- Analyse les CVE détectées en priorité, pas seulement le SSL.\n"
+            "- Si CVE CRITICAL ou HIGH, explique le risque concret et la correction.\n"
             "- Si IP privée, explique que CyberGuardian analyse des actifs publics.\n"
-            "- Pour un domaine public, recommande Let's Encrypt.\n"
+            "- Pour un domaine public, recommande Let's Encrypt si besoin.\n"
             "- Adapte tes recommandations au contexte sénégalais.\n"
             "- Réponds en français simple, concis.\n\n"
             f"Question de l'utilisateur : {body.question}"
@@ -350,14 +419,74 @@ def ask_ai(
 
 # ── Helpers internes ──────────────────────────────────────────────────────────
 
+def _dns_summary(results: dict) -> str:
+    dns = results.get("dns")
+    if not dns:
+        return ""
+    policy = dns.get("dmarc_policy") or "absent"
+    return (
+        f"DNS : SPF={'présent' if dns.get('spf_present') else 'ABSENT'}, "
+        f"DMARC={'présent (p=' + policy + ')' if dns.get('dmarc_present') else 'ABSENT'}, "
+        f"DKIM={'présent' if dns.get('dkim_present') else 'non détecté'}, "
+        f"DNSSEC={'activé' if dns.get('dnssec_enabled') else 'absent'}, "
+        f"score={dns.get('score', 0)}/25\n"
+    )
+
+
+def _whois_summary(results: dict) -> str:
+    whois = results.get("whois")
+    if not whois or not whois.get("found"):
+        return ""
+    days = whois.get("days_until_expiry")
+    expiry = ""
+    if days is not None:
+        expiry = f", expire dans {days} jours" if days >= 0 else f", EXPIRÉ depuis {abs(days)} jours"
+    return (
+        f"WHOIS : registrar={whois.get('registrar') or 'N/A'}, "
+        f"créé le {whois.get('created') or 'N/A'}{expiry}\n"
+    )
+
+
+def _headers_summary(results: dict) -> str:
+    headers = results.get("headers")
+    if not headers:
+        return ""
+    missing = ", ".join(headers.get("headers_missing", [])) or "aucun"
+    return (
+        f"En-têtes de sécurité HTTP : score={headers.get('score', 0)}/20, "
+        f"manquants : {missing}\n"
+    )
+
+
+def _expert_share_active(scan: Scan, user: User, db: Session) -> bool:
+    """Un expert accède au scan d'un client si une conversation sur cette cible
+    est au niveau 3 (contrat signé) depuis moins de 48h (CDC §4.2)."""
+    from routers.messages import mission_active
+    conv = (
+        db.query(Conversation)
+        .filter(
+            Conversation.expert_id == user.id,
+            Conversation.client_id == scan.user_id,
+            Conversation.subject   == scan.target,
+            Conversation.level     >= 3,
+        )
+        .order_by(Conversation.id.desc())
+        .first()
+    )
+    return bool(conv and mission_active(conv))
+
+
 def _get_scan_or_404(scan_id: int, db: Session, current_user: User | None) -> Scan:
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan introuvable")
-    # Admin voit tout ; client ne voit que ses propres scans
+    # Admin voit tout ; client ne voit que ses propres scans ;
+    # un expert voit le scan d'un client si contrat signé < 48h (niveau 3)
     if current_user and current_user.role != "admin":
         if scan.user_id and scan.user_id != current_user.id:
-            raise HTTPException(status_code=403, detail="Accès refusé")
+            if not (current_user.role == "expert"
+                    and _expert_share_active(scan, current_user, db)):
+                raise HTTPException(status_code=403, detail="Accès refusé ou expiré")
     return scan
 
 
@@ -406,20 +535,36 @@ def _generate_simple_explanation(scan: dict) -> str:
         )
     else:
         ssl        = results.get("ssl", {})
+        cves       = results.get("cves", [])
+        server     = results.get("server_banner", "")
         issues     = scan.get("issues", [])
         asset_type = _detect_asset_type(scan["target"])
         issues_str = "\n".join("- " + i["title"] for i in issues) if issues else "Aucun"
+        cve_critical = [c for c in cves if c.get("severity", "").upper() in ("CRITICAL", "CRITIQUE")]
+        cve_high     = [c for c in cves if c.get("severity", "").upper() in ("HIGH", "HAUT")]
+        cve_str = "\n".join(
+            "  - " + c.get("id", "?") + " CVSS=" + str(c.get("cvss", "?")) +
+            " (" + c.get("severity", "?") + ") : " + (c.get("title") or "")[:120]
+            for c in cves[:6]
+        ) or "  Aucune CVE détectée"
         prompt = (
             "Tu es un expert en cybersécurité. Explique les résultats d'un scan à une personne non-informaticienne.\n\n"
             f"Actif analysé : {scan['target']}\nType d'actif : {asset_type}\n"
-            f"Score : {scan['score']}/100\nCertificat SSL valide : {ssl.get('valid', '?')}\n"
-            f"Certificat expiré : {ssl.get('expired', '?')}\nAuto-signé : {ssl.get('self_signed', '?')}\n"
-            f"Version TLS : {ssl.get('tls_version', '?')}\nGrade : {ssl.get('grade', '?')}\n"
-            f"Expiration : {ssl.get('expiry_date', '?')} ({ssl.get('days_until_expiry', '?')} jours restants)\n"
-            f"Problèmes : {issues_str}\n\n"
+            f"Score global : {scan['score']}/100\nServeur détecté : {server or 'N/A'}\n"
+            f"Certificat SSL valide : {ssl.get('valid', '?')} | "
+            f"Version TLS : {ssl.get('tls_version', '?')} | Grade : {ssl.get('grade', '?')}\n"
+            f"Expiration SSL : {ssl.get('expiry_date', '?')} ({ssl.get('days_until_expiry', '?')} jours restants)\n"
+            f"{_dns_summary(results)}"
+            f"{_whois_summary(results)}"
+            f"{_headers_summary(results)}"
+            f"CVE détectées ({len(cves)}) dont {len(cve_critical)} CRITIQUE et {len(cve_high)} HAUT :\n{cve_str}\n"
+            f"Problèmes détectés :\n{issues_str}\n\n"
             "RÈGLES :\n"
+            "- Commence par les CVE critiques si présentes — c'est la priorité.\n"
+            "- Explique ce que chaque CVE critique/haute signifie concrètement.\n"
+            "- Mentionne le score et ce qui l'a fait baisser (CVE + SSL).\n"
             "- Si IP privée, explique que cet outil analyse des actifs publics.\n"
-            "- Français simple, 5 à 8 phrases max, sans jargon. Tutoie le lecteur."
+            "- Français simple, 6 à 9 phrases max, sans jargon. Tutoie le lecteur."
         )
 
     try:

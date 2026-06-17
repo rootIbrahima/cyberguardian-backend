@@ -55,10 +55,13 @@ def _get_server_banner(target: str) -> str:
 
 
 def _parse_banner(banner: str) -> str:
+    """Retourne 'Nom version' si la bannière contient une version, sinon ''.
+    Sans version (ex: 'Apache' seul), la recherche NVD par mot-clé renvoie
+    des CVE anciennes non pertinentes — on ne cherche pas."""
     match = re.match(r'([A-Za-z][A-Za-z\-]+)/(\d+\.\d+[\.\d]*)', banner)
     if match:
         return f"{match.group(1)} {match.group(2)}"
-    return banner.split()[0] if banner else ""
+    return ""
 
 
 def _search_nvd(keyword: str, max_results: int = 5) -> list:

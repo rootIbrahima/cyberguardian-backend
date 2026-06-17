@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 from database import get_db
 import models
 
-SECRET_KEY = "cg-secret-key-change-in-production-2026"
+from config import JWT_SECRET_KEY as SECRET_KEY
+
 ALGORITHM  = "HS256"
 TOKEN_EXPIRE_DAYS = 7
 
@@ -48,7 +49,11 @@ def get_current_user_optional(
     user_id = payload.get("sub")
     if not user_id:
         return None
-    return db.query(models.User).filter(models.User.id == int(user_id)).first()
+    user = db.query(models.User).filter(models.User.id == int(user_id)).first()
+    # Un compte désactivé perd l'accès immédiatement, même avec un token valide
+    if user and not user.is_active:
+        return None
+    return user
 
 
 def get_current_user(

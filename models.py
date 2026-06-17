@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, JSON, ForeignKey
+from sqlalchemy import Column, Integer, Float, String, Boolean, JSON, ForeignKey
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -37,13 +37,20 @@ class Scan(Base):
     user = relationship("User", back_populates="scans")
 
     def to_dict(self) -> dict:
+        # Les scans EASM antérieurs au score pondéré stockaient le score SSL /25 :
+        # on les ramène à l'échelle /100 (même normalisation que calculate_score
+        # quand seul le critère SSL est évalué).
+        score = self.score
+        if (self.type != "github" and score is not None
+                and not (self.results or {}).get("score_detail")):
+            score = round(score / 25 * 100)
         return {
             "id":            self.id,
             "user_id":       self.user_id,
             "target":        self.target,
             "type":          self.type,
             "typeLabel":     self.type_label,
-            "score":         self.score,
+            "score":         score,
             "status":        self.status,
             "vulns":         self.vulns,
             "cve":           self.cve,
@@ -52,3 +59,81 @@ class Scan(Base):
             "issues":        self.issues or [],
             "conversations": self.conversations or [],
         }
+
+
+class ExpertProfile(Base):
+    __tablename__ = "expert_profiles"
+
+    id           = Column(Integer, primary_key=True, index=True)
+    user_id      = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    cni          = Column(String, nullable=False)
+    level        = Column(String)                       # niveau d'études
+    specialty    = Column(String)
+    cni_file     = Column(String)                       # chemin du fichier téléversé
+    diploma_file = Column(String)
+    status       = Column(String, default="pending")    # pending | approved | rejected
+    rating       = Column(Float, default=4.5)
+    missions     = Column(Integer, default=0)
+    price        = Column(Integer, default=150000)      # FCFA
+    city         = Column(String, default="Dakar")
+    color        = Column(String, default="#1F5C99")
+    applied_at   = Column(String)                       # date de candidature (libellé)
+
+    user = relationship("User")
+
+    def to_card(self) -> dict:
+        """Format attendu par ExpertCard.jsx (annuaire des experts)."""
+        return {
+            "id":        self.id,
+            "user_id":   self.user_id,
+            "name":      self.user.name if self.user else "",
+            "specialty": self.specialty,
+            "rating":    self.rating or 4.5,
+            "missions":  self.missions or 0,
+            "price":     self.price or 150000,
+            "city":      self.city or "Dakar",
+            "color":     self.color or "#1F5C99",
+        }
+
+    def to_pending(self) -> dict:
+        """Format attendu par AdminPage.jsx (candidatures en attente)."""
+        return {
+            "id":        self.id,
+            "name":      self.user.name if self.user else "",
+            "cni":       self.cni,
+            "level":     self.level,
+            "specialty": self.specialty,
+            "date":      self.applied_at,
+        }
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id               = Column(Integer, primary_key=True, index=True)
+    client_id        = Column(Integer, ForeignKey("users.id"), nullable=False)
+    expert_id        = Column(Integer, ForeignKey("users.id"), nullable=False)
+    subject          = Column(String, nullable=False)    # cible du scan concerné
+    level            = Column(Integer, default=1)        # 1 demande | 2 mission | 3 contrat
+    mission_start    = Column(String, nullable=True)     # ISO — début de l'accès 48h (niveau 3)
+    rating           = Column(Integer, nullable=True)    # note du client (1-5) après mission
+    client_last_read = Column(String, nullable=True)     # ISO — pour le compteur non-lus
+    expert_last_read = Column(String, nullable=True)
+    created_at       = Column(String)
+
+    client   = relationship("User", foreign_keys=[client_id])
+    expert   = relationship("User", foreign_keys=[expert_id])
+    messages = relationship("Message", back_populates="conversation",
+                            order_by="Message.id", cascade="all, delete-orphan")
+
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False)
+    sender_id       = Column(Integer, ForeignKey("users.id"), nullable=True)   # NULL = message système
+    text            = Column(String, nullable=False)
+    created_at      = Column(String)                     # ISO
+
+    conversation = relationship("Conversation", back_populates="messages")
