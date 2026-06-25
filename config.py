@@ -14,3 +14,8 @@ OLLAMA_KEY   = os.getenv("OLLAMA_KEY", "")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3:latest")
 
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "cg-dev-only-secret")
+
+# Bot Telegram (notifications et support multi-canal)
+TELEGRAM_BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_BOT_USERNAME   = os.getenv("TELEGRAM_BOT_USERNAME", "CyberGuardianBot")
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")

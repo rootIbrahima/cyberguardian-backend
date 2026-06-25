@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, Float, String, Boolean, JSON, ForeignKey
+from datetime import datetime
+from sqlalchemy import Column, Integer, Float, String, Boolean, JSON, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -137,3 +138,42 @@ class Message(Base):
     created_at      = Column(String)                     # ISO
 
     conversation = relationship("Conversation", back_populates="messages")
+
+
+class TelegramLink(Base):
+    """Liaison vérifiée entre un compte CyberGuardian et un compte Telegram.
+    Telegram identifie par chat_id (pas par numéro). Un seul compte Telegram
+    par utilisateur, un seul utilisateur par chat_id."""
+    __tablename__ = "telegram_links"
+
+    id        = Column(Integer, primary_key=True, index=True)
+    user_id   = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    chat_id   = Column(String, unique=True, nullable=False, index=True)
+    linked_at = Column(DateTime, default=datetime.utcnow)
+    actif     = Column(Boolean, default=True)
+
+    user = relationship("User")
+
+
+class TelegramCode(Base):
+    """Code de liaison à usage unique (CG-XXXXXX), valable 5 minutes."""
+    __tablename__ = "telegram_codes"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(Integer, ForeignKey("users.id"), nullable=False)
+    code       = Column(String, unique=True, nullable=False, index=True)
+    expire_at  = Column(DateTime, nullable=False)
+    utilise    = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TelegramMessage(Base):
+    """Historique des échanges du bot, pour donner une mémoire de conversation
+    à l'assistant (les questions ne sont plus traitées isolément)."""
+    __tablename__ = "telegram_messages"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    role       = Column(String, nullable=False)   # 'user' | 'assistant'
+    content    = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)

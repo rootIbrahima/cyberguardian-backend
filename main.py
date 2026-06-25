@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import engine
 from models import Base
 from routers import scans, experts, messages, admin
+from routers import telegram_liaison, telegram_webhook
 from routers import auth as auth_router
 
 # Crée toutes les tables au démarrage
@@ -22,6 +23,8 @@ app.include_router(scans.router)
 app.include_router(experts.router)
 app.include_router(messages.router)
 app.include_router(admin.router)
+app.include_router(telegram_liaison.router)
+app.include_router(telegram_webhook.router)
 
 
 @app.get("/")

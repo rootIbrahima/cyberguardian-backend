@@ -389,7 +389,9 @@ def ask_ai(
                 "POST",
                 f"{OLLAMA_URL}/api/generate",
                 headers={"Authorization": f"Bearer {OLLAMA_KEY}"},
-                json={"model": OLLAMA_MODEL, "prompt": context, "stream": True},
+                json={"model": OLLAMA_MODEL, "prompt": context, "stream": True,
+                      "think": False,   # qwen3.6 : pas de raisonnement parasite dans le flux
+                      "options": {"num_predict": 280, "temperature": 0.6}},
                 timeout=httpx.Timeout(connect=15.0, read=180.0, write=15.0, pool=5.0),
             ) as resp:
                 resp.raise_for_status()
@@ -571,7 +573,9 @@ def _generate_simple_explanation(scan: dict) -> str:
         resp = httpx.post(
             f"{OLLAMA_URL}/api/generate",
             headers={"Authorization": f"Bearer {OLLAMA_KEY}"},
-            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
+            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
+                  "think": False,   # qwen3.6 : réponse directe sans raisonnement
+                  "options": {"num_predict": 260, "temperature": 0.6}},
             timeout=60,
         )
         resp.raise_for_status()
