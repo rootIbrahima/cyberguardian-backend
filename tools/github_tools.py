@@ -145,6 +145,37 @@ def github_info(target: str) -> dict:
 
 # ── Tool 2 : scan_bandit ──────────────────────────────────────────────────────
 
+# Traductions françaises des règles Bandit (par identifiant de test), pour que
+# les intitulés présentés au client soient cohérents avec le reste de l'app.
+_BANDIT_FR = {
+    "B101": "Utilisation d'assert (ignoré en production)",
+    "B102": "Utilisation d'exec()",
+    "B103": "Permissions de fichier trop permissives",
+    "B104": "Écoute sur toutes les interfaces réseau (0.0.0.0)",
+    "B105": "Mot de passe potentiellement codé en dur",
+    "B106": "Mot de passe potentiellement codé en dur (argument)",
+    "B107": "Mot de passe potentiellement codé en dur (valeur par défaut)",
+    "B108": "Utilisation d'un fichier temporaire non sûr",
+    "B110": "Exception silencieusement ignorée (try/except/pass)",
+    "B112": "Exception silencieusement ignorée (try/except/continue)",
+    "B113": "Requête réseau sans délai d'expiration (timeout)",
+    "B201": "Application Flask en mode debug",
+    "B301": "Désérialisation pickle non sûre",
+    "B303": "Fonction de hachage faible (MD5/SHA1)",
+    "B307": "Utilisation d'eval()",
+    "B311": "Générateur pseudo-aléatoire inadapté à un usage de sécurité",
+    "B324": "Fonction de hachage faible (hashlib)",
+    "B403": "Import d'un module de sérialisation non sûr (pickle)",
+    "B404": "Import du module subprocess (exécution de commandes)",
+    "B501": "Vérification du certificat TLS désactivée",
+    "B506": "Chargement YAML non sûr (yaml.load)",
+    "B602": "Sous-processus lancé avec shell=True",
+    "B603": "Exécution d'un sous-processus (vérifier les entrées)",
+    "B607": "Exécution d'un programme via un chemin partiel",
+    "B608": "Requête SQL potentiellement vulnérable à l'injection",
+}
+
+
 def _run_bandit(tmpdir: str) -> dict:
     """Run Bandit on an already-cloned directory."""
     try:
@@ -159,12 +190,21 @@ def _run_bandit(tmpdir: str) -> dict:
                 file_rel = str(Path(item["filename"]).relative_to(tmpdir)).replace("\\", "/")
             except Exception:
                 file_rel = item.get("filename", "")
+            test_id  = item.get("test_id", "")
+            issue_en = item.get("issue_text", "")
+            issue_fr = _BANDIT_FR.get(test_id) or issue_en
+            # Règles « mot de passe codé en dur » : on conserve la valeur détectée
+            # (c'est le code du client, elle l'aide à localiser la ligne concernée)
+            if test_id in ("B105", "B106", "B107"):
+                m = re.search(r"""['"]([^'"]+)['"]""", issue_en)
+                if m:
+                    issue_fr = f"{issue_fr} : '{m.group(1)}'"
             findings.append({
                 "severity":   item.get("issue_severity", "LOW"),
                 "confidence": item.get("issue_confidence", "LOW"),
                 "file":       file_rel,
                 "line":       item.get("line_number", 0),
-                "issue":      item.get("issue_text", ""),
+                "issue":      issue_fr,
                 "cwe":        f"CWE-{item['issue_cwe']['id']}" if item.get("issue_cwe") else "",
                 "code":       (item.get("code") or "").strip()[:120],
             })

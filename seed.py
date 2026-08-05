@@ -66,7 +66,6 @@ def seed():
     finally:
         db.close()
 
-
 if __name__ == "__main__":
     print("=== Seed CyberGuardian ===\n")
     seed()

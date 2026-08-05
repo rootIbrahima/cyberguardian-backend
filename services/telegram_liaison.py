@@ -74,7 +74,7 @@ def verifier_code_et_lier(code: str, chat_id: str, db: Session) -> dict:
 
     if datetime.utcnow() > record.expire_at:
         return {"succes": False,
-                "erreur": "Code expiré. Générez un nouveau code depuis CyberGuardian."}
+                "erreur": "Code expiré. Générez un nouveau code depuis la plateforme."}
 
     # Ce chat_id est-il déjà lié à un AUTRE compte ?
     existant = db.query(TelegramLink).filter(
@@ -84,7 +84,7 @@ def verifier_code_et_lier(code: str, chat_id: str, db: Session) -> dict:
     ).first()
     if existant:
         return {"succes": False,
-                "erreur": "Ce compte Telegram est déjà lié à un autre compte CyberGuardian."}
+                "erreur": "Ce compte Telegram est déjà lié à un autre compte de notre plateforme."}
 
     # Crée ou met à jour le lien
     lien = db.query(TelegramLink).filter(TelegramLink.user_id == record.user_id).first()
@@ -117,6 +117,15 @@ def get_user_par_chat_id(chat_id: str, db: Session) -> User | None:
     if not lien:
         return None
     return db.query(User).filter(User.id == lien.user_id).first()
+
+
+def get_chat_id_par_user(user_id: int, db: Session) -> str | None:
+    """Sens inverse : retrouve le chat_id d'un utilisateur pour lui pousser une alerte."""
+    lien = db.query(TelegramLink).filter(
+        TelegramLink.user_id == user_id,
+        TelegramLink.actif.is_(True),
+    ).first()
+    return lien.chat_id if lien else None
 
 
 # ── Déliaison ─────────────────────────────────────────────────────────────────
