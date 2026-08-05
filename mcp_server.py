@@ -24,6 +24,9 @@ from tools.check_ssl import check_ssl as _check_ssl
 from tools.check_cve import check_tls_cves as _check_tls_cves
 from tools.check_cve import check_service_cves as _check_service_cves
 from tools.scan_headers import scan_headers as _scan_headers
+from tools.check_ports import check_ports as _check_ports
+from tools.target_guard import resoudre_et_valider as _valider_cible
+from tools.target_guard import CibleInterdite
 from tools.calculate_score import calculate_score as _calculate_score
 from tools.check_epss import fetch_epss as _fetch_epss
 from tools.check_epss import combined_priority as _combined_priority
@@ -78,18 +81,38 @@ def scan_http_headers(target: str) -> dict:
     return asdict(_scan_headers(target))
 
 
+# ── Outil 9 (CDC) — Scan de ports réseau ──────────────────────────────────────
+
+@mcp.tool
+def scan_network_ports(target: str) -> dict:
+    """Scan de ports TCP non intrusif (connect scan, sans découverte d'hôte) sur
+    une vingtaine de ports courants : services d'administration (SSH, RDP,
+    Telnet), partage de fichiers (SMB, NetBIOS), bases de données (MySQL,
+    PostgreSQL, MongoDB, Redis, Elasticsearch, MSSQL) et web. Signale tout
+    service sensible exposé directement sur Internet. Score sur 15 points.
+    Nécessite Nmap installé sur le serveur d'analyse."""
+    try:
+        _valider_cible(target)
+    except CibleInterdite as e:
+        return {"error": str(e)}
+    return asdict(_check_ports(target))
+
+
 # ── Outil 10 (CDC) — Score global pondéré ─────────────────────────────────────
 
 @mcp.tool
 def calculate_global_score(dns_score: int | None = None,
                            ssl_score: int | None = None,
-                           headers_score: int | None = None) -> dict:
+                           headers_score: int | None = None,
+                           ports_score: int | None = None) -> dict:
     """Calcule le score de sécurité global /100 pondéré selon la méthodologie
-    CyberGuardian : DNS 25 pts, SSL/TLS 25 pts, En-têtes HTTP 20 pts (ports et
-    réputation à venir). Passer les scores obtenus par les outils check_dns_records,
-    check_ssl_certificate et scan_http_headers ; les critères non évalués sont
-    exclus et le score est normalisé sur le reste."""
-    return _calculate_score({"dns": dns_score, "ssl": ssl_score, "headers": headers_score})
+    CyberGuardian : DNS 25 pts, SSL/TLS 25 pts, En-têtes HTTP 20 pts, Ports
+    réseau 15 pts (réputation à venir). Passer les scores obtenus par les outils
+    check_dns_records, check_ssl_certificate, scan_http_headers et
+    scan_network_ports ; les critères non évalués sont exclus et le score est
+    normalisé sur le reste."""
+    return _calculate_score({"dns": dns_score, "ssl": ssl_score,
+                             "headers": headers_score, "ports": ports_score})
 
 
 # ── Outil 3 (CDC) — SSL/TLS ───────────────────────────────────────────────────
@@ -156,20 +179,26 @@ def correlate_cvss_epss(cve_ids: list[str], cvss_scores: list[float] | None = No
 def analyze_security(target: str) -> dict:
     """Analyse de sécurité EASM complète d'un domaine, d'une IP ou d'une URL :
     DNS anti-phishing (SPF/DMARC/DKIM), certificat SSL/TLS, en-têtes de
-    sécurité HTTP, CVE liées à la configuration TLS et au serveur exposé.
-    Retourne tous les résultats agrégés, le score global /100 pondéré et la
-    liste consolidée des problèmes. À privilégier quand l'utilisateur demande
-    une analyse ou un audit complet d'une cible."""
+    sécurité HTTP, scan de ports réseau, CVE liées à la configuration TLS et au
+    serveur exposé. Retourne tous les résultats agrégés, le score global /100
+    pondéré et la liste consolidée des problèmes. À privilégier quand
+    l'utilisateur demande une analyse ou un audit complet d'une cible."""
     import ipaddress
+
+    try:
+        _valider_cible(target)
+    except CibleInterdite as e:
+        return {"error": str(e)}
 
     ssl_result = _check_ssl(target)
     headers_result = _scan_headers(target)
+    ports_result = _check_ports(target)
     tls_cves = _check_tls_cves(ssl_result.tls_version or "", ssl_result.cipher_suite or "")
     banner, svc_cves = _check_service_cves(target)
     cves = _enrich_cves(tls_cves + svc_cves, id_key="id")   # gravité + probabilité EPSS
 
-    issues = list(ssl_result.issues) + list(headers_result.issues)
-    parts = {"ssl": ssl_result.score, "headers": headers_result.score}
+    issues = list(ssl_result.issues) + list(headers_result.issues) + list(ports_result.issues)
+    parts = {"ssl": ssl_result.score, "headers": headers_result.score, "ports": ports_result.score}
     dns_dict = None
     whois_dict = None
 
@@ -194,6 +223,7 @@ def analyze_security(target: str) -> dict:
         "whois":         whois_dict,
         "ssl":           asdict(ssl_result),
         "headers":       asdict(headers_result),
+        "ports":         asdict(ports_result),
         "cves":          cves,
         "server_banner": banner,
         "score":         score_detail["score"],
