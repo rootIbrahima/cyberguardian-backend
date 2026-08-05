@@ -11,6 +11,8 @@ from typing import Optional
 
 import dns.resolver
 
+from tools.target_guard import extraire_hote
+
 # Sélecteurs DKIM les plus répandus (Google Workspace, Microsoft 365, défauts)
 DKIM_SELECTORS = ["default", "google", "selector1", "selector2", "k1", "mail", "dkim"]
 
@@ -35,14 +37,6 @@ class DNSResult:
     error: Optional[str] = None
 
 
-def _extract_domain(target: str) -> str:
-    target = target.strip()
-    for prefix in ("https://", "http://"):
-        if target.startswith(prefix):
-            target = target[len(prefix):]
-    return target.split("/")[0].split(":")[0]
-
-
 def _query_txt(name: str, resolver: dns.resolver.Resolver) -> list[str]:
     try:
         answers = resolver.resolve(name, "TXT")
@@ -52,7 +46,7 @@ def _query_txt(name: str, resolver: dns.resolver.Resolver) -> list[str]:
 
 
 def check_dns(target: str) -> DNSResult:
-    domain = _extract_domain(target)
+    domain = extraire_hote(target)
     result = DNSResult(target=domain)
 
     resolver = dns.resolver.Resolver()

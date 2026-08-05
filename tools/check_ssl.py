@@ -4,6 +4,8 @@ import datetime
 from dataclasses import dataclass, field
 from typing import Optional
 
+from tools.target_guard import extraire_hote
+
 
 @dataclass
 class SSLResult:
@@ -30,7 +32,7 @@ def check_ssl(target: str, port: int = 443, timeout: int = 10) -> SSLResult:
     Vérifie le certificat SSL/TLS d'un domaine.
     Retourne un SSLResult avec tous les détails + score /25 pts.
     """
-    hostname = _extract_hostname(target)
+    hostname = extraire_hote(target)
 
     result = SSLResult(
         target=hostname,
@@ -87,14 +89,6 @@ def check_ssl(target: str, port: int = 443, timeout: int = 10) -> SSLResult:
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
-
-def _extract_hostname(target: str) -> str:
-    target = target.strip()
-    for prefix in ("https://", "http://"):
-        if target.startswith(prefix):
-            target = target[len(prefix):]
-    return target.split("/")[0].split(":")[0]
-
 
 def _get_cn(rdns_tuples) -> Optional[str]:
     for rdn in rdns_tuples:

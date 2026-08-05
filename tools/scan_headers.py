@@ -11,6 +11,8 @@ from typing import Optional
 
 import httpx
 
+from tools.target_guard import extraire_hote
+
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
 # (en-tête, points, sévérité si absent, titre, recommandation)
@@ -57,16 +59,9 @@ class HeadersResult:
     error: Optional[str] = None
 
 
-def _extract_host(target: str) -> str:
-    target = target.strip()
-    for prefix in ("https://", "http://"):
-        if target.startswith(prefix):
-            target = target[len(prefix):]
-    return target.split("/")[0]
-
-
 def scan_headers(target: str, timeout: int = 10) -> HeadersResult:
-    host = _extract_host(target)
+    # Le port est conservé : il fait partie de l'URL reconstruite ci-dessous.
+    host = extraire_hote(target, garder_port=True)
     result = HeadersResult(target=host)
 
     resp = None
