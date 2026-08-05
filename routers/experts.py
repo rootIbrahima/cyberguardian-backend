@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import ExpertProfile, User
 from auth import get_current_user
+from routers.notifications import creer_notification
 
 router = APIRouter(prefix="/experts", tags=["experts"])
 
@@ -117,6 +118,14 @@ def apply(
         profile.cni_file = cni_path
     if diploma_path:
         profile.diploma_file = diploma_path
+
+    for admin in db.query(User).filter(User.role == "admin").all():
+        creer_notification(
+            db, admin.id, "expert_pending",
+            title = f"Nouvelle candidature — {current_user.name}",
+            body  = specialty or "Spécialité non précisée",
+            link  = "/admin",
+        )
 
     db.commit()
     db.refresh(profile)

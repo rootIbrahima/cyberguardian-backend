@@ -10,8 +10,11 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Conversation, ExpertProfile, Scan, User
+from models import Conversation, ExpertProfile, RepoAutorisation, Scan, User
 from auth import get_current_user
+from services.remediation import proposer_correction
+from routers.github_oauth import _repo_slug
+from routers.notifications import creer_notification
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -52,6 +55,12 @@ def approve_expert(
     profile = _get_profile_or_404(profile_id, db)
     profile.status = "approved"
     profile.user.role = "expert"
+    creer_notification(
+        db, profile.user_id, "expert_decision",
+        title = "Candidature acceptée",
+        body  = "Vous êtes désormais expert validé — votre profil apparaît dans l'annuaire.",
+        link  = "/dashboard",
+    )
     db.commit()
     return {"id": profile.id, "status": profile.status}
 
@@ -64,8 +73,72 @@ def reject_expert(
 ):
     profile = _get_profile_or_404(profile_id, db)
     profile.status = "rejected"
+    creer_notification(
+        db, profile.user_id, "expert_decision",
+        title = "Candidature non retenue",
+        body  = "Votre candidature d'expert n'a pas été validée cette fois-ci.",
+        link  = "/settings",
+    )
     db.commit()
     return {"id": profile.id, "status": profile.status}
+
+
+@router.post("/scans/{scan_id}/remediation")
+def proposer_remediation(
+    scan_id: int,
+    db:      Session = Depends(get_db),
+    _:       User    = Depends(require_admin),
+):
+    """Déclenche la remédiation assistée d'un scan GitHub : ouvre une Pull
+    Request corrective sur le dépôt du client (si celui-ci l'a autorisée)."""
+    scan = db.query(Scan).filter(Scan.id == scan_id).first()
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan introuvable")
+    if scan.type != "github":
+        raise HTTPException(status_code=400,
+                            detail="La correction automatique ne concerne que les scans GitHub.")
+
+    res = proposer_correction(scan.user_id, scan.target, scan.to_dict(), db)
+    if not res["ok"]:
+        raise HTTPException(status_code=400, detail=res["message"])
+    return res
+
+
+@router.get("/remediation/candidats")
+def remediation_candidats(
+    db: Session = Depends(get_db),
+    _:  User    = Depends(require_admin),
+):
+    """Scans GitHub des clients ayant autorisé la correction de leur dépôt :
+    ce que l'admin peut proposer de corriger."""
+    autos = db.query(RepoAutorisation).filter(RepoAutorisation.actif.is_(True)).all()
+    items = []
+    for a in autos:
+        scans = (db.query(Scan)
+                 .filter(Scan.user_id == a.user_id, Scan.type == "github")
+                 .order_by(Scan.id.desc()).all())
+        scan = next((s for s in scans if _repo_slug(s.target) == a.repo_slug), None)
+        # Sans scan, on ne connaît pas les vulnérabilités : rien à proposer
+        if not scan:
+            continue
+        d   = scan.to_dict()
+        r   = d.get("results", {}) or {}
+        deps    = len((r.get("safety", {})    or {}).get("findings", []))
+        secrets = len((r.get("trufflehog", {}) or {}).get("findings", []))
+        code    = len((r.get("bandit", {})     or {}).get("findings", []))
+        npm     = len((r.get("npm_audit") or {}).get("findings", [])) if r.get("npm_audit") else 0
+        client  = db.query(User).filter(User.id == a.user_id).first()
+        items.append({
+            "scan_id":      scan.id,
+            "client":       client.name if client else "",
+            "email":        client.email if client else "",
+            "slug":         a.repo_slug,
+            "problemes":    deps + secrets + code + npm,   # total détecté
+            "corrigeables": deps,                          # dépendances : traitées automatiquement
+            "secrets":      secrets,                       # secrets : nécessitent un expert / l'agent
+            "date":         d.get("date"),
+        })
+    return items
 
 
 @router.get("/experts/approved")

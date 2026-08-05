@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import Conversation, ExpertProfile, Message, Scan, User
 from auth import get_current_user
+from routers.notifications import creer_notification
 
 router = APIRouter(prefix="/conversations", tags=["messages"])
 
@@ -291,6 +292,15 @@ def send_message(
     )
     db.add(msg)
 
+    # Notifie l'autre participant du nouveau message
+    dest_id = conv.expert_id if current_user.id == conv.client_id else conv.client_id
+    creer_notification(
+        db, dest_id, "message",
+        title = f"Nouveau message — {conv.subject}",
+        body  = text[:120],
+        link  = "/messages",
+    )
+
     # Niveau 1 → 2 : la première réponse de l'expert vaut acceptation de mission
     if conv.level == 1 and current_user.id == conv.expert_id:
         conv.level = 2
@@ -300,6 +310,12 @@ def send_message(
             text            = "Mission acceptée — l'expert a maintenant accès au score détaillé par catégorie (Niveau 2).",
             created_at      = _now_iso(),
         ))
+        creer_notification(
+            db, conv.client_id, "mission_level",
+            title = f"Mission acceptée — {conv.subject}",
+            body  = "L'expert a accepté votre demande et accède au score détaillé.",
+            link  = "/messages",
+        )
 
     db.commit()
     db.refresh(msg)
@@ -331,6 +347,12 @@ def sign_contract(
     profile = db.query(ExpertProfile).filter(ExpertProfile.user_id == conv.expert_id).first()
     if profile:
         profile.missions = (profile.missions or 0) + 1
+    creer_notification(
+        db, conv.expert_id, "contract",
+        title = f"Contrat signé — {conv.subject}",
+        body  = "Vous avez accès au rapport complet pendant 48h.",
+        link  = "/messages",
+    )
     db.commit()
     return {"id": conv.id, "level": conv.level, "missionStart": conv.mission_start}
 
@@ -382,5 +404,11 @@ def rate_expert(
         text            = f"Le client a évalué la mission : {body.stars}/5.",
         created_at      = _now_iso(),
     ))
+    creer_notification(
+        db, conv.expert_id, "rating",
+        title = f"Nouvelle évaluation — {body.stars}/5",
+        body  = f"Mission « {conv.subject} » notée par le client.",
+        link  = "/messages",
+    )
     db.commit()
     return {"id": conv.id, "rating": conv.rating, "expert_rating": expert_rating}

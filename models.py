@@ -30,7 +30,8 @@ class Scan(Base):
     status     = Column(String, default="completed")
     vulns      = Column(Integer, default=0)
     cve        = Column(Integer, default=0)
-    date       = Column(String)
+    date       = Column(String)                        # libellé d'affichage : « 27 jul. 2026, 12:09 »
+    created_at = Column(String, index=True)            # ISO — comparable, sert au quota journalier
     results    = Column(JSON, default=dict)
     issues     = Column(JSON, default=list)
     conversations = Column(JSON, default=list)
@@ -140,6 +141,36 @@ class Message(Base):
     conversation = relationship("Conversation", back_populates="messages")
 
 
+class Notification(Base):
+    """Notification persistante : reste visible (marquée lue) après consultation,
+    contrairement à un simple compteur dérivé d'une requête live. Une ligne par
+    événement (nouveau message, mission acceptée, contrat signé, candidature
+    expert, remédiation proposée...)."""
+    __tablename__ = "notifications"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    type       = Column(String, nullable=False)    # message | mission_level | contract | expert_pending | expert_decision | remediation
+    title      = Column(String, nullable=False)
+    body       = Column(String)
+    link       = Column(String)                    # route frontend à ouvrir au clic
+    read_at    = Column(String, nullable=True)      # ISO — NULL = non lue
+    created_at = Column(String)                     # ISO
+
+    user = relationship("User")
+
+    def to_dict(self) -> dict:
+        return {
+            "id":        self.id,
+            "type":      self.type,
+            "title":     self.title,
+            "body":      self.body,
+            "link":      self.link,
+            "read":      self.read_at is not None,
+            "createdAt": self.created_at,
+        }
+
+
 class TelegramLink(Base):
     """Liaison vérifiée entre un compte CyberGuardian et un compte Telegram.
     Telegram identifie par chat_id (pas par numéro). Un seul compte Telegram
@@ -177,3 +208,33 @@ class TelegramMessage(Base):
     role       = Column(String, nullable=False)   # 'user' | 'assistant'
     content    = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class GitHubConnection(Base):
+    """Autorisation OAuth d'un client : le jeton permet à l'agent d'ouvrir une
+    Pull Request de correction sur ses dépôts (portée public_repo, moindre
+    privilège). Le backend reste maître ; l'agent ne pousse jamais en direct."""
+    __tablename__ = "github_connections"
+
+    id           = Column(Integer, primary_key=True, index=True)
+    user_id      = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    access_token = Column(String, nullable=False)
+    github_login = Column(String)
+    connected_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User")
+
+
+class RepoAutorisation(Base):
+    """Consentement explicite et révocable : le client autorise la correction
+    assistée d'un dépôt précis. C'est la trace technique sur laquelle l'admin
+    s'appuie avant de déclencher l'agent."""
+    __tablename__ = "repo_autorisations"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    user_id     = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    repo_slug   = Column(String, nullable=False, index=True)   # owner/repo
+    actif       = Column(Boolean, default=True)
+    autorise_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User")
