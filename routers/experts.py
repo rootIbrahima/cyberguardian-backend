@@ -44,8 +44,12 @@ def _save_upload(upload: UploadFile, dest_stem: str) -> str:
 
 
 @router.get("")
-def list_experts(db: Session = Depends(get_db)):
-    """Annuaire public (authentifié) des experts validés."""
+def list_experts(
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(get_current_user),
+):
+    """Annuaire des experts validés, réservé aux utilisateurs authentifiés :
+    il expose l'identité, la spécialité et le tarif de personnes réelles."""
     from models import Conversation
 
     profiles = (
