@@ -80,6 +80,10 @@ def _priority_rank(priority: str | None) -> int:
 
 class CyberGuardianPDF(FPDF):
 
+    # Renseignés avant le rendu : repris dans l'en-tête et le pied de chaque page
+    reference = ""
+    actif     = ""
+
     def header(self):
         # La couverture (page 1) n'affiche ni bandeau ni pied de page. Le test
         # porte sur le numéro de page : fpdf dessine le pied à la fermeture de
@@ -88,25 +92,28 @@ class CyberGuardianPDF(FPDF):
             return
         self.set_fill_color(*BLUE_DARK)
         self.rect(0, 0, 210, 18, "F")
-        self.set_font(FONT, "B", 11)
+        self.set_font(FONT, "B", 10)
         self.set_text_color(*WHITE)
         self.set_xy(10, 4)
-        self.cell(0, 10, "CyberGuardian  ·  Rapport de sécurité", ln=False)
+        self.cell(0, 10, "Rapport d'évaluation de la posture de sécurité", ln=False)
         self.set_font(FONT, "", 8)
-        self.set_text_color(180, 200, 220)
+        self.set_text_color(170, 195, 220)
         self.set_xy(0, 6)
-        self.cell(200, 6, datetime.now().strftime("%d/%m/%Y  %H:%M"), align="R")
+        self.cell(200, 6, _clean(self.actif), align="R")
         self.ln(14)
 
     def footer(self):
         if self.page_no() == 1:
             return
-        self.set_y(-12)
+        self.set_y(-13)
         self.set_draw_color(*GRAY_LIGHT)
         self.line(10, self.get_y(), 200, self.get_y())
+        self.set_y(-11)
         self.set_font(FONT, "", 7.5)
         self.set_text_color(*GRAY_MID)
-        self.cell(0, 8, f"CyberGuardian  ·  Page {self.page_no()}  ·  Document confidentiel", align="C")
+        self.cell(63, 8, _clean(self.reference))
+        self.cell(64, 8, "Document confidentiel", align="C")
+        self.cell(63, 8, f"Page {self.page_no()} sur {{nb}}", align="R")
 
     def chapitre(self, titre: str, nouvelle_page: bool = True):
         """Titre de premier niveau, repris automatiquement dans le sommaire."""
@@ -130,8 +137,17 @@ class CyberGuardianPDF(FPDF):
         self.multi_cell(186, 5.2, _clean(texte))
         self.ln(2)
 
-    def section_title(self, title: str):
-        # Style sobre : filet bleu à gauche + titre foncé + fin trait de séparation
+    def espace_restant(self) -> float:
+        return self.h - self.b_margin - self.get_y()
+
+    def section_title(self, title: str, reserve: float = 30):
+        """Style sobre : filet bleu à gauche + titre foncé + trait de séparation.
+        `reserve` est la place minimale exigée sous le titre : un intertitre seul
+        en bas de page, avec son contenu à la page suivante, est un défaut de
+        composition (ligne orpheline)."""
+        if self.espace_restant() < reserve:
+            self.add_page()
+        # Filet bleu à gauche + titre foncé + fin trait de séparation
         self.ln(5)
         y = self.get_y()
         self.set_fill_color(*BLUE_MED)
@@ -643,12 +659,14 @@ def _section_resume_executif(pdf: CyberGuardianPDF, scan: dict, score_max: int,
     pdf.set_font(FONT, "B", 13)
     pdf.set_text_color(*GRAY_DARK)
     pdf.cell(0, 12, f"Posture {libelle.lower()}")
+    # Répartition complète : n'afficher que les niveaux présents évite un
+    # « 0 critique, 0 élevé, 0 moyen » qui laisse le lecteur chercher le reste.
+    presents = [f"{compte[s]} {s.lower()}" for s in ORDRE_SEVERITE if compte[s]]
+    repartition = ", ".join(presents) if presents else "aucun constat"
     pdf.set_xy(18, y + 16)
     pdf.set_font(FONT, "", 8.5)
     pdf.set_text_color(*GRAY_MID)
-    pdf.cell(0, 6, f"{len(issues)} constat(s) — "
-                   f"{compte['CRITIQUE']} critique(s), {compte['HAUT']} élevé(s), "
-                   f"{compte['MOYEN']} moyen(s)")
+    pdf.cell(0, 6, _clean(f"{len(issues)} constat(s) — {repartition}"))
     pdf.set_y(y + 32)
 
     pdf.paragraphe(interpretation)
@@ -766,27 +784,72 @@ def _section_synthese(pdf: CyberGuardianPDF, scan: dict):
         "BAS":      "Bonne pratique non appliquée, sans risque immédiat",
         "INFO":     "Élément de contexte, sans incidence de sécurité",
     }
-    for sev in ORDRE_SEVERITE:
+    for rang, sev in enumerate(ORDRE_SEVERITE):
         n = compte[sev]
+        # Tramage une ligne sur deux : lecture facilitée sur un tableau dense
+        if rang % 2 == 0:
+            pdf.set_fill_color(247, 249, 251)
+            pdf.rect(12, pdf.get_y(), 186, 7.5, "F")
         pdf.set_x(12)
         pdf.set_font(FONT, "B", 9)
-        pdf.set_text_color(*_sev_color(sev))
-        pdf.cell(50, 7, f"  {sev.capitalize()}")
-        pdf.set_font(FONT, "B", 9)
-        pdf.set_text_color(*(GRAY_DARK if n else GRAY_LIGHT))
-        pdf.cell(28, 7, str(n), align="C")
+        pdf.set_text_color(*(_sev_color(sev) if n else GRAY_MID))
+        pdf.cell(50, 7.5, f"  {sev.capitalize()}")
+        pdf.set_font(FONT, "B", 10)
+        pdf.set_text_color(*(GRAY_DARK if n else (190, 195, 200)))
+        pdf.cell(28, 7.5, str(n), align="C")
         pdf.set_font(FONT, "", 8.5)
-        pdf.set_text_color(*(GRAY_MID if n else GRAY_LIGHT))
-        pdf.cell(108, 7, f"  {interpretations[sev]}", ln=True)
-        pdf.set_draw_color(*GRAY_LIGHT)
-        pdf.line(12, pdf.get_y(), 198, pdf.get_y())
+        pdf.set_text_color(*(GRAY_MID if n else (190, 195, 200)))
+        pdf.cell(108, 7.5, f"  {interpretations[sev]}", ln=True)
 
     pdf.ln(4)
-    breakdown = (scan.get("results", {}).get("score_detail", {}) or {}).get("breakdown", [])
+    r = scan.get("results", {}) or {}
+    breakdown = (r.get("score_detail", {}) or {}).get("breakdown", [])
     if breakdown:
         pdf.section_title("Score par critère")
         for b in breakdown:
             pdf.score_bar(b.get("points", 0), b.get("max", 25), b.get("label", ""))
+
+    elif scan.get("type") == "github":
+        # Le score GitHub n'est pas pondéré par critère : on restitue plutôt le
+        # volume de constats par contrôle, qui indique où porter l'effort.
+        pdf.section_title("Répartition par contrôle")
+        controles = [
+            ("Analyse statique du code (Bandit)", (r.get("bandit") or {}).get("findings", []),
+             "Motifs dangereux relevés dans le code source"),
+            ("Dépendances Python (Safety)", (r.get("safety") or {}).get("findings", []),
+             "Bibliothèques dont la version présente une CVE connue"),
+            ("Dépendances JavaScript (npm audit)", (r.get("npm_audit") or {}).get("findings", []),
+             "Paquets npm vulnérables signalés par l'écosystème"),
+            ("Secrets exposés (TruffleHog)", (r.get("trufflehog") or {}).get("findings", []),
+             "Clés d'API, jetons ou mots de passe lisibles dans le dépôt"),
+        ]
+        for rang, (nom, findings, detail) in enumerate(controles):
+            n = len(findings)
+            if rang % 2 == 0:
+                pdf.set_fill_color(247, 249, 251)
+                pdf.rect(12, pdf.get_y(), 186, 12, "F")
+            y = pdf.get_y()
+            pdf.set_xy(14, y + 1)
+            pdf.set_font(FONT, "B", 9)
+            pdf.set_text_color(*(GRAY_DARK if n else GRAY_MID))
+            pdf.cell(150, 5, _clean(nom))
+            pdf.set_font(FONT, "B", 11)
+            pdf.set_text_color(*(RED if n else GREEN))
+            pdf.cell(30, 5, str(n), align="R", ln=True)
+            pdf.set_xy(14, y + 6)
+            pdf.set_font(FONT, "", 8)
+            pdf.set_text_color(*GRAY_MID)
+            pdf.cell(0, 5, _clean(detail), ln=True)
+            pdf.set_y(y + 12)
+
+        pdf.ln(3)
+        info = r.get("github_info", {}) or {}
+        pdf.section_title("Contexte du dépôt")
+        pdf.kv_row("Langage principal", r.get("langage") or info.get("language") or "-")
+        pdf.kv_row("Visibilité",        info.get("visibility") or "-")
+        pdf.kv_row("Licence",           info.get("license") or "Aucune")
+        pdf.kv_row("Contributeurs",     str(info.get("contributors") or "-"))
+        pdf.kv_row("Dernière mise à jour", str(info.get("updated_at") or "-"))
 
 
 def _section_plan(pdf: CyberGuardianPDF, scan: dict):
@@ -890,6 +953,9 @@ def generate_scan_pdf(scan: dict, ai_explanation: str = "") -> bytes:
 
     pdf = CyberGuardianPDF()
     _register_fonts(pdf)            # police Unicode avant add_page (l'en-tête l'utilise)
+    pdf.reference = f"CG-{scan.get('id', 0):05d}"
+    pdf.actif     = target
+    pdf.alias_nb_pages()            # résout « page X sur Y » en fin de rendu
     pdf.set_auto_page_break(auto=True, margin=18)
 
     # Couverture, puis sommaire dont la pagination est résolue en fin de rendu
