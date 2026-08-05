@@ -42,18 +42,21 @@ def _clean(text: str) -> str:
     return str(text).replace("**", "").replace("*", "")
 
 
-# Palette
+# Palette — alignée sur le design system du frontend (BLUE_MED = --cg-primary).
+# Contrastes vérifiés selon WCAG AA sur fond blanc et sur trame : toutes les
+# couleurs de texte dépassent 4,5:1, sauf GRAY_MUTED (3,5:1) réservé aux
+# valeurs nulles et GRAY_LIGHT qui ne sert qu'aux filets et aux aplats.
 BLUE_DARK  = (15,  41,  77)
-BLUE_MED   = (31,  92, 153)
+BLUE_MED   = (31,  92, 153)     # #1F5C99
 GREEN      = (26, 122,  74)
 ORANGE     = (133,  79,  11)
 RED        = (153,  27,  27)
 GRAY_DARK  = (17,  24,  39)
 GRAY_MID   = (107, 114, 128)
-GRAY_LIGHT = (229, 231, 235)
+GRAY_MUTED = (130, 137, 148)    # valeurs à zéro : lisibles mais secondaires
+GRAY_LIGHT = (229, 231, 235)    # filets et aplats uniquement
+TRAME      = (247, 249, 251)    # fond d'une ligne sur deux dans les tableaux
 WHITE      = (255, 255, 255)
-PURPLE     = (109,  40, 217)
-GH_DARK    = (17,  24,  39)
 
 
 def _score_color(pct: int) -> tuple:
@@ -115,10 +118,18 @@ class CyberGuardianPDF(FPDF):
         self.cell(64, 8, "Document confidentiel", align="C")
         self.cell(63, 8, f"Page {self.page_no()} sur {{nb}}", align="R")
 
-    def chapitre(self, titre: str, nouvelle_page: bool = True):
-        """Titre de premier niveau, repris automatiquement dans le sommaire."""
-        if nouvelle_page:
+    def chapitre(self, titre: str, forcer_page: bool = False, reserve: float = 110):
+        """Titre de premier niveau, repris automatiquement dans le sommaire.
+
+        Le chapitre s'enchaîne sur la page en cours s'il y reste assez de place :
+        systématiquement ouvrir une page produit des pages remplies au quart, ce
+        qui donne un document creux. Il bascule à la page suivante dès que
+        l'espace restant descend sous `reserve`, pour ne pas amorcer un chapitre
+        en bas de page."""
+        if forcer_page or self.espace_restant() < reserve:
             self.add_page()
+        else:
+            self.ln(8)
         self.start_section(_clean(titre))
         self.set_font(FONT, "B", 15)
         self.set_text_color(*BLUE_DARK)
@@ -200,11 +211,18 @@ class CyberGuardianPDF(FPDF):
 
         # Un constat ne doit jamais être coupé en deux : sans cette réserve, le
         # saut de page automatique survient après l'étiquette de sévérité et
-        # laisse celle-ci seule en bas de page.
-        besoin = 26 + 4.5 * (len(_clean(desc)) // 95 + 1)
+        # laisse celle-ci seule en bas de page. La hauteur est mesurée par un
+        # rendu à blanc, une estimation au nombre de caractères étant trop
+        # imprécise pour les textes longs.
+        self.set_font(FONT, "", 8)
+        besoin = 14 + self.multi_cell(box_w - 6, 4.5, _clean(desc),
+                                      dry_run=True, output="HEIGHT")
         if extra:
-            besoin += 4.5 * (len(_clean(extra)) // 95 + 1)
-        if self.get_y() + besoin > self.h - self.b_margin:
+            besoin += self.multi_cell(box_w - 6, 4.5, _clean(extra),
+                                      dry_run=True, output="HEIGHT")
+        if tool:
+            besoin += 4
+        if self.espace_restant() < besoin:
             self.add_page()
 
         y_start = self.get_y()
@@ -634,7 +652,7 @@ def _rendre_sommaire(pdf: CyberGuardianPDF, entrees):
 def _section_resume_executif(pdf: CyberGuardianPDF, scan: dict, score_max: int,
                              ai_explanation: str = ""):
     # Pas de saut : insert_toc_placeholder a déjà ouvert la page suivante
-    pdf.chapitre("1.  Résumé exécutif", nouvelle_page=False)
+    pdf.chapitre("1.  Résumé exécutif")
 
     score   = scan.get("score", 0)
     issues  = scan.get("issues", [])
@@ -788,17 +806,17 @@ def _section_synthese(pdf: CyberGuardianPDF, scan: dict):
         n = compte[sev]
         # Tramage une ligne sur deux : lecture facilitée sur un tableau dense
         if rang % 2 == 0:
-            pdf.set_fill_color(247, 249, 251)
+            pdf.set_fill_color(*TRAME)
             pdf.rect(12, pdf.get_y(), 186, 7.5, "F")
         pdf.set_x(12)
         pdf.set_font(FONT, "B", 9)
         pdf.set_text_color(*(_sev_color(sev) if n else GRAY_MID))
         pdf.cell(50, 7.5, f"  {sev.capitalize()}")
         pdf.set_font(FONT, "B", 10)
-        pdf.set_text_color(*(GRAY_DARK if n else (190, 195, 200)))
+        pdf.set_text_color(*(GRAY_DARK if n else GRAY_MUTED))
         pdf.cell(28, 7.5, str(n), align="C")
         pdf.set_font(FONT, "", 8.5)
-        pdf.set_text_color(*(GRAY_MID if n else (190, 195, 200)))
+        pdf.set_text_color(*(GRAY_MID if n else GRAY_MUTED))
         pdf.cell(108, 7.5, f"  {interpretations[sev]}", ln=True)
 
     pdf.ln(4)
@@ -826,7 +844,7 @@ def _section_synthese(pdf: CyberGuardianPDF, scan: dict):
         for rang, (nom, findings, detail) in enumerate(controles):
             n = len(findings)
             if rang % 2 == 0:
-                pdf.set_fill_color(247, 249, 251)
+                pdf.set_fill_color(*TRAME)
                 pdf.rect(12, pdf.get_y(), 186, 12, "F")
             y = pdf.get_y()
             pdf.set_xy(14, y + 1)
@@ -968,7 +986,7 @@ def generate_scan_pdf(scan: dict, ai_explanation: str = "") -> bytes:
     _section_methodologie(pdf, scan)
     _section_synthese(pdf, scan)
 
-    pdf.chapitre("4.  Détail technique des constats")
+    pdf.chapitre("4.  Détail technique des constats", forcer_page=True)
     pdf.paragraphe(
         "Résultat brut de chaque contrôle, avec l'outil qui l'a produit. Cette partie "
         "s'adresse aux personnes chargées de la mise en œuvre.",
