@@ -6,15 +6,29 @@ Webhook Telegram — reçoit messages et appuis sur boutons (callbacks).
 - un client ayant plusieurs scans peut choisir lequel consulter via « Mes scans »
 - question libre : réponse IA (Ollama) en tâche de fond, avec mémoire de conversation
 Renvoie toujours 200 à Telegram, sinon Telegram réessaie.
+
+Authentification : Telegram renvoie dans l'en-tête X-Telegram-Bot-Api-Secret-Token
+le secret fourni lors de l'enregistrement du webhook. Sans cette vérification,
+quiconque connaît l'URL publique peut forger un message et se faire passer pour
+un utilisateur lié. L'enregistrement se fait manuellement, secret compris :
+
+    curl -F "url=https://<domaine-public>/telegram/webhook" \
+         -F "secret_token=<TELEGRAM_WEBHOOK_SECRET>" \
+         https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook
+
+Changer TELEGRAM_WEBHOOK_SECRET impose de rejouer cette commande, sinon le bot
+cesse de répondre.
 """
 
+import hmac
+
 import httpx
-from fastapi import APIRouter, Request, Depends, BackgroundTasks
+from fastapi import APIRouter, Request, Depends, BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 
 from database import get_db, SessionLocal
 from models import Scan, TelegramMessage
-from config import OLLAMA_URL, OLLAMA_KEY, OLLAMA_MODEL
+from config import OLLAMA_URL, OLLAMA_KEY, OLLAMA_MODEL, TELEGRAM_WEBHOOK_SECRET
 from services.telegram_liaison import (
     verifier_code_et_lier,
     get_user_par_chat_id,
@@ -65,6 +79,14 @@ async def telegram_webhook(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
+    # Comparaison à temps constant : le secret ne doit pas fuiter par le temps
+    # de réponse. Vérification désactivée si aucun secret n'est configuré, pour
+    # ne pas bloquer un environnement de développement.
+    if TELEGRAM_WEBHOOK_SECRET:
+        recu = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if not hmac.compare_digest(recu, TELEGRAM_WEBHOOK_SECRET):
+            raise HTTPException(status_code=403, detail="Requête non authentifiée")
+
     try:
         body = await request.json()
     except Exception:
