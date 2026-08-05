@@ -2,7 +2,7 @@ import base64
 import json
 import re
 import shutil
-import subprocess  # nosec B404 — subprocess required for git/bandit/npm invocations
+import subprocess  # nosec B404, subprocess required for git/bandit/npm invocations
 import sys
 import tempfile
 from pathlib import Path
@@ -61,7 +61,7 @@ def _clone(owner: str, repo: str) -> tuple[str | None, str | None]:
     """Shallow-clone repo into a temp dir. Returns (tmpdir, error)."""
     tmpdir = tempfile.mkdtemp(prefix="cg_gh_")
     try:
-        r = subprocess.run(  # nosec B603 B607 — list args (no shell=True), owner/repo validated by regex
+        r = subprocess.run(  # nosec B603 B607, list args (no shell=True), owner/repo validated by regex
             ["git", "clone", "--depth", "1", "--quiet",
              f"https://github.com/{owner}/{repo}.git", tmpdir],
             capture_output=True, text=True, timeout=90,
@@ -106,7 +106,7 @@ def github_info(target: str) -> dict:
             )
             if br.status_code == 200:
                 branches_count = len(br.json())
-        except Exception:  # nosec B110 — optional metadata, skip on any API failure
+        except Exception:  # nosec B110, optional metadata, skip on any API failure
             pass
         try:
             co = httpx.get(
@@ -115,7 +115,7 @@ def github_info(target: str) -> dict:
             )
             if co.status_code == 200:
                 contributors_count = len(co.json())
-        except Exception:  # nosec B110 — optional metadata, skip on any API failure
+        except Exception:  # nosec B110, optional metadata, skip on any API failure
             pass
 
         return {
@@ -179,7 +179,7 @@ _BANDIT_FR = {
 def _run_bandit(tmpdir: str) -> dict:
     """Run Bandit on an already-cloned directory."""
     try:
-        result = subprocess.run(  # nosec B603 — sys.executable is trusted, list args, no shell=True
+        result = subprocess.run(  # nosec B603, sys.executable is trusted, list args, no shell=True
             [sys.executable, "-m", "bandit", "-r", tmpdir, "-f", "json", "-q", "--exit-zero"],
             capture_output=True, text=True, timeout=120,
         )
@@ -254,7 +254,7 @@ def scan_safety(target: str) -> dict:
                 if m:
                     packages.append({"name": m.group(1).lower(), "version": m.group(2).strip()})
             break
-        except Exception:  # nosec B112 — skip req file variant on network/decode error
+        except Exception:  # nosec B112, skip req file variant on network/decode error
             continue
 
     if not packages:
@@ -289,7 +289,7 @@ def scan_safety(target: str) -> dict:
                     "severity": severity,
                     "desc":     v.get("summary", "")[:150],
                 })
-        except Exception:  # nosec B112 — skip package on OSV API error, continue others
+        except Exception:  # nosec B112, skip package on OSV API error, continue others
             continue
 
     return {
@@ -342,7 +342,7 @@ def _run_trufflehog(tmpdir: str) -> dict:
                     break
             if len(findings) >= 20:
                 break
-        except Exception:  # nosec B112 — skip unreadable file (binary, permissions), continue scan
+        except Exception:  # nosec B112, skip unreadable file (binary, permissions), continue scan
             continue
 
     return {"findings": findings}
@@ -354,15 +354,15 @@ def _run_npm_audit(tmpdir: str) -> dict:
     """Run npm audit on an already-cloned JS/TS repository."""
     try:
         # Generate package-lock.json without downloading node_modules
-        subprocess.run(  # nosec B603 B607 — list args, no shell=True, cwd is a controlled tmpdir
+        subprocess.run(  # nosec B603 B607, list args, no shell=True, cwd is a controlled tmpdir
             ["npm", "install", "--package-lock-only", "--ignore-scripts"],
             cwd=tmpdir, capture_output=True, text=True, timeout=60,
         )
-        result = subprocess.run(  # nosec B603 B607 — list args, no shell=True, cwd is a controlled tmpdir
+        result = subprocess.run(  # nosec B603 B607, list args, no shell=True, cwd is a controlled tmpdir
             ["npm", "audit", "--json"],
             cwd=tmpdir, capture_output=True, text=True, timeout=60,
         )
-        # npm audit exits non-zero when vulnerabilities found — parse stdout anyway
+        # npm audit exits non-zero when vulnerabilities found, parse stdout anyway
         try:
             data = json.loads(result.stdout)
         except json.JSONDecodeError:
@@ -433,7 +433,7 @@ def scan_github(target: str) -> dict:
     if api_lang == "N/A":
         api_lang = ""
 
-    # Clone once — needed for all file-based tools + language fallback
+    # Clone once : needed for all file-based tools + language fallback
     tmpdir, clone_err = _clone(owner, repo)
 
     language  = api_lang or (_detect_language_from_files(tmpdir) if tmpdir else "")
@@ -441,20 +441,20 @@ def scan_github(target: str) -> dict:
     is_python = lang_low == "python"
     is_js_ts  = lang_low in ("javascript", "typescript")
 
-    # Safety uses GitHub API — no clone needed
+    # Safety uses GitHub API : no clone needed
     if is_python:
         safety = scan_safety(target)
     else:
         safety = {
             "findings":          [],
             "packages_checked":  0,
-            "note":              f"N/A — {language or 'langage non détecté'}",
+            "note":              f"N/A : {language or 'langage non détecté'}",
         }
 
     if tmpdir:
         bandit     = _run_bandit(tmpdir) if is_python else {
             "findings": [],
-            "note":     f"N/A — {language or 'langage non détecté'}",
+            "note":     f"N/A : {language or 'langage non détecté'}",
         }
         npm_audit  = _run_npm_audit(tmpdir) if is_js_ts else None
         trufflehog = _run_trufflehog(tmpdir)
@@ -462,7 +462,7 @@ def scan_github(target: str) -> dict:
     else:
         err_obj   = {"findings": [], "error": clone_err or "Clonage impossible"}
         bandit    = ({**err_obj, "loc": 0} if is_python
-                     else {"findings": [], "note": f"N/A — {language or 'langage non détecté'}"})
+                     else {"findings": [], "note": f"N/A : {language or 'langage non détecté'}"})
         npm_audit  = dict(err_obj) if is_js_ts else None
         trufflehog = dict(err_obj)
 

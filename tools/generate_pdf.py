@@ -42,7 +42,7 @@ def _clean(text: str) -> str:
     return str(text).replace("**", "").replace("*", "")
 
 
-# Palette — alignée sur le design system du frontend (BLUE_MED = --cg-primary).
+# Palette : alignée sur le design system du frontend (BLUE_MED = --cg-primary).
 # Contrastes vérifiés selon WCAG AA sur fond blanc et sur trame : toutes les
 # couleurs de texte dépassent 4,5:1, sauf GRAY_MUTED (3,5:1) réservé aux
 # valeurs nulles et GRAY_LIGHT qui ne sert qu'aux filets et aux aplats.
@@ -301,7 +301,7 @@ def _section_ssl(pdf: CyberGuardianPDF, scan: dict):
         mx = dns.get("mx_records", [])
         pdf.kv_row("Serveurs MX", ", ".join(mx[:3]) + ("..." if len(mx) > 3 else "") if mx else "Aucun")
 
-    # WHOIS — identite et expiration du domaine
+    # WHOIS : identite et expiration du domaine
     if whois and whois.get("found"):
         pdf.section_title("WHOIS (propriétaire et expiration du domaine)")
         pdf.kv_row("Registrar", whois.get("registrar") or "-")
@@ -357,7 +357,7 @@ def _section_ssl(pdf: CyberGuardianPDF, scan: dict):
                 tool  = iss.get("tool", ""),
             )
 
-    # CVE — gravité (CVSS) croisée avec probabilité d'exploitation (EPSS)
+    # CVE : gravité (CVSS) croisée avec probabilité d'exploitation (EPSS)
     cves = scan.get("results", {}).get("cves", [])
     if cves:
         pdf.section_title(f"CVE identifiées  ({len(cves)})")
@@ -433,7 +433,7 @@ def _section_github(pdf: CyberGuardianPDF, scan: dict):
     b_note     = bandit.get("note", "")
     b_err      = bandit.get("error", "")
 
-    pdf.section_title(f"Bandit — Analyse statique Python  ({len(b_findings)} finding(s))")
+    pdf.section_title(f"Bandit : analyse statique Python  ({len(b_findings)} finding(s))")
     if b_err or b_note:
         pdf.set_font(FONT, "I", 9)
         pdf.set_text_color(*GRAY_MID)
@@ -469,14 +469,14 @@ def _section_github(pdf: CyberGuardianPDF, scan: dict):
     s_note     = safety.get("note", "")
     s_err      = safety.get("error", "")
 
-    pdf.section_title(f"Safety — Dépendances Python vulnérables  ({len(s_findings)})")
+    pdf.section_title(f"Safety : dépendances Python vulnérables  ({len(s_findings)})")
     if s_err or s_note:
         pdf.set_font(FONT, "I", 9)
         pdf.set_text_color(*GRAY_MID)
         pdf.set_x(12)
         pdf.multi_cell(186, 5, _clean(s_note or s_err))
     elif not s_findings:
-        msg = f"{s_pkg} dépendances vérifiées — aucune CVE connue" if s_pkg else "Aucun fichier requirements.txt trouvé"
+        msg = f"{s_pkg} dépendances vérifiées, aucune CVE connue" if s_pkg else "Aucun fichier requirements.txt trouvé"
         if s_file:
             msg += f" ({s_file})"
         _empty_ok(pdf, msg)
@@ -505,7 +505,7 @@ def _section_github(pdf: CyberGuardianPDF, scan: dict):
     npm_err      = (npm or {}).get("error", "")
     npm_summary  = (npm or {}).get("summary")
     if npm_findings or (npm and not npm_err):
-        pdf.section_title(f"npm audit — Dépendances JavaScript  ({len(npm_findings)})")
+        pdf.section_title(f"npm audit : dépendances JavaScript  ({len(npm_findings)})")
         if npm_err:
             pdf.set_font(FONT, "I", 9)
             pdf.set_text_color(*GRAY_MID)
@@ -536,7 +536,7 @@ def _section_github(pdf: CyberGuardianPDF, scan: dict):
     t_findings = truffle.get("findings", [])
     t_err      = truffle.get("error", "")
 
-    pdf.section_title(f"TruffleHog — Secrets exposés  ({len(t_findings)})")
+    pdf.section_title(f"TruffleHog : secrets exposés  ({len(t_findings)})")
     if t_err:
         pdf.set_font(FONT, "I", 9)
         pdf.set_text_color(*GRAY_MID)
@@ -684,7 +684,7 @@ def _section_resume_executif(pdf: CyberGuardianPDF, scan: dict, score_max: int,
     pdf.set_xy(18, y + 16)
     pdf.set_font(FONT, "", 8.5)
     pdf.set_text_color(*GRAY_MID)
-    pdf.cell(0, 6, _clean(f"{len(issues)} constat(s) — {repartition}"))
+    pdf.cell(0, 6, _clean(f"{len(issues)} constat(s) : {repartition}"))
     pdf.set_y(y + 32)
 
     pdf.paragraphe(interpretation)
@@ -741,18 +741,18 @@ def _section_methodologie(pdf: CyberGuardianPDF, scan: dict):
     pdf.section_title("Contrôles effectués")
     if est_github:
         controles = [
-            ("Analyse statique du code", "Bandit — recherche de motifs dangereux dans le code Python"),
-            ("Dépendances vulnérables",  "Safety et npm audit — comparaison des versions aux CVE connues"),
+            ("Analyse statique du code", "Bandit, recherche de motifs dangereux dans le code Python"),
+            ("Dépendances vulnérables",  "Safety et npm audit, comparaison des versions aux CVE connues"),
             ("Secrets exposés",          "Recherche par motifs de clés d'API, jetons et mots de passe"),
         ]
     else:
         controles = [
-            ("Authentification email", "SPF, DKIM, DMARC et DNSSEC — enregistrements DNS publics"),
+            ("Authentification email", "SPF, DKIM, DMARC et DNSSEC dans les enregistrements DNS publics"),
             ("Chiffrement du trafic",  "Certificat TLS, version du protocole et suite de chiffrement"),
             ("En-têtes HTTP",          "Six en-têtes de sécurité recommandés par l'OWASP"),
             ("Ports réseau",           "Connexion TCP simple sur une sélection de ports courants"),
             ("Vulnérabilités connues", "CVE liées au serveur exposé, croisées CVSS et EPSS"),
-            ("Identité du domaine",    "Registre WHOIS — propriétaire et échéance"),
+            ("Identité du domaine",    "Registre WHOIS : propriétaire et échéance"),
         ]
     for nom, detail in controles:
         pdf.kv_row(nom, detail)
@@ -796,7 +796,7 @@ def _section_synthese(pdf: CyberGuardianPDF, scan: dict):
     pdf.cell(108, 8, "  Interprétation", fill=True, ln=True)
 
     interpretations = {
-        "CRITIQUE": "Exploitable sans compétence particulière — traiter sans délai",
+        "CRITIQUE": "Exploitable sans compétence particulière, à traiter sans délai",
         "HAUT":     "Risque avéré, exploitation documentée et accessible",
         "MOYEN":    "Renforcement attendu, exploitation moins directe",
         "BAS":      "Bonne pratique non appliquée, sans risque immédiat",
@@ -930,7 +930,7 @@ def _section_plan(pdf: CyberGuardianPDF, scan: dict):
 
 
 def _section_annexes(pdf: CyberGuardianPDF):
-    pdf.chapitre("6.  Annexe — glossaire")
+    pdf.chapitre("6.  Annexe : glossaire")
     pdf.paragraphe(
         "Définitions des termes techniques employés dans ce rapport, à l'usage des "
         "lecteurs non spécialistes."
@@ -948,9 +948,9 @@ def _section_annexes(pdf: CyberGuardianPDF):
     pdf.ln(3)
     pdf.section_title("Sources et référentiels")
     for source in [
-        "NIST NVD — base publique des vulnérabilités (CVE)",
-        "FIRST.org — scores CVSS et probabilités d'exploitation EPSS",
-        "OWASP Secure Headers Project — en-têtes HTTP recommandés",
+        "NIST NVD, base publique des vulnérabilités (CVE)",
+        "FIRST.org, scores CVSS et probabilités d'exploitation EPSS",
+        "OWASP Secure Headers Project, en-têtes HTTP recommandés",
         "RFC 7208 (SPF), RFC 6376 (DKIM), RFC 7489 (DMARC), RFC 4033 (DNSSEC)",
     ]:
         pdf.set_font(FONT, "", 9)
@@ -1009,7 +1009,7 @@ def _build_easm_recommendations(ssl: dict, dns: dict | None, whois: dict | None,
                                 headers: dict | None, issues: list) -> list[str]:
     recs = []
 
-    # WHOIS — priorité absolue si le domaine est expiré ou proche de l'expiration
+    # WHOIS : priorité absolue si le domaine est expiré ou proche de l'expiration
     if whois and whois.get("found"):
         d = whois.get("days_until_expiry")
         if d is not None and d < 0:
@@ -1019,7 +1019,7 @@ def _build_easm_recommendations(ssl: dict, dns: dict | None, whois: dict | None,
             recs.append(f"Renouvelez votre nom de domaine sous {d} jours pour eviter une interruption "
                         "de service et un risque de detournement.")
 
-    # DNS — priorité anti-phishing (critère le plus lourd du score)
+    # DNS : priorité anti-phishing (critère le plus lourd du score)
     if dns:
         if not dns.get("spf_present"):
             recs.append("Ajoutez un enregistrement SPF (TXT 'v=spf1 ...') : sans lui, n'importe quel "

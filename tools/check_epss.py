@@ -1,5 +1,5 @@
 """
-Outil EPSS — Exploit Prediction Scoring System (FIRST.org).
+Outil EPSS : Exploit Prediction Scoring System (FIRST.org).
 Enrichit les CVE détectées (EASM et dépendances GitHub) avec la probabilité
 d'exploitation à 30 jours, puis croise CVSS (gravité) et EPSS (probabilité)
 pour produire une priorité de traitement.

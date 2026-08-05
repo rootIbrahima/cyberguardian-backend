@@ -102,7 +102,7 @@ def route_client_par_chat_id(
     request: Request,
     db:      Session = Depends(get_db),
 ):
-    """Métadonnées du client lié à ce chat_id — pour que l'agent réponde.
+    """Métadonnées du client lié à ce chat_id, pour que l'agent réponde.
     Ne renvoie jamais les résultats complets de scan, seulement des métadonnées."""
     _require_bot_secret(request)
 

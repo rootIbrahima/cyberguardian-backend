@@ -30,7 +30,7 @@ router = APIRouter(prefix="/scans", tags=["scans"])
 MOIS = ["jan", "fev", "mar", "avr", "mai", "jun",
         "jul", "aou", "sep", "oct", "nov", "dec"]
 
-# CDC §7.1 — limite le rythme des scans pour qu'un compte ne puisse pas
+# CDC §7.1 : limite le rythme des scans pour qu'un compte ne puisse pas
 # transformer la plateforme en relais de reconnaissance à haute fréquence.
 QUOTA_PAR_CIBLE_24H = 3
 
@@ -73,11 +73,11 @@ def _detect_asset_type(target: str) -> str:
         ip = ipaddress.ip_address(target.strip())
         if ip.is_private:
             if str(ip).startswith("192.168."):
-                return "IP privée — probablement un routeur ou équipement réseau domestique"
+                return "IP privée : probablement un routeur ou équipement réseau domestique"
             if str(ip).startswith("10."):
-                return "IP privée — réseau d'entreprise interne"
-            return "IP privée — équipement réseau interne"
-        return "IP publique — serveur accessible sur internet"
+                return "IP privée : réseau d'entreprise interne"
+            return "IP privée : équipement réseau interne"
+        return "IP publique : serveur accessible sur internet"
     except ValueError:
         return "Nom de domaine public"
 
@@ -185,7 +185,7 @@ def launch_scan(
             {
                 "severity": _sev_fr.get(f["severity"], f["severity"]),
                 "title":    f["issue"],
-                "desc":     f"Fichier : {f['file']} — ligne {f['line']}",
+                "desc":     f"Fichier : {f['file']}, ligne {f['line']}",
                 "color":    "red" if f["severity"] == "HIGH" else "orange" if f["severity"] == "MEDIUM" else "yellow",
                 "tool":     "scan_bandit()",
             }
@@ -194,7 +194,7 @@ def launch_scan(
             {
                 "severity": "HAUT",
                 "title":    f"Secret exposé : {f['type']}",
-                "desc":     f"Fichier : {f['file']} — ligne {f['line']}",
+                "desc":     f"Fichier : {f['file']}, ligne {f['line']}",
                 "color":    "red",
                 "tool":     "scan_trufflehog()",
             }
@@ -372,7 +372,7 @@ def ask_ai(
         secrets   = len(truffle.get("findings", []))
         score_val = scan_dict["score"]
         score_label = (
-            f"{score_val}/{score_max} — excellent, aucune faille détectée"
+            f"{score_val}/{score_max}, excellent, aucune faille détectée"
             if score_val == score_max else f"{score_val}/{score_max}"
         )
         context = (
@@ -382,8 +382,8 @@ def ask_ai(
             f"Score GitHub : {score_label}\n"
             f"Visibilité : {info.get('visibility', 'N/A')} | Licence : {info.get('license', 'N/A')}\n"
             f"Bandit (Python statique) : {len(bandit.get('findings', []))} findings ({bandit_h} HIGH, {bandit_m} MEDIUM)\n"
-            f"Safety (CVE dépendances Python) : {len(safety.get('findings', []))} CVE — {cve_list}\n"
-            f"npm audit (CVE Node.js) : {len(npm_audit.get('findings', []))} vulnérabilités — {npm_list}\n"
+            f"Safety (CVE dépendances Python) : {len(safety.get('findings', []))} CVE : {cve_list}\n"
+            f"npm audit (CVE Node.js) : {len(npm_audit.get('findings', []))} vulnérabilités, {npm_list}\n"
             f"Secrets exposés : {secrets} secret(s) détecté(s)\n\n"
             f"RÈGLES :\n"
             f"- Priorise les secrets exposés et les CVE CRITICAL/HIGH.\n"
@@ -590,7 +590,7 @@ def _generate_simple_explanation(scan: dict) -> str:
         secrets   = len(truffle.get("findings", []))
         score_val = scan["score"]
         score_label = (
-            f"{score_val}/{score_max} — score parfait, aucune faille détectée"
+            f"{score_val}/{score_max}, score parfait, aucune faille détectée"
             if score_val == score_max else f"{score_val}/{score_max}"
         )
         prompt = (
@@ -633,7 +633,7 @@ def _generate_simple_explanation(scan: dict) -> str:
             f"CVE détectées ({len(cves)}) dont {len(cve_critical)} CRITIQUE et {len(cve_high)} HAUT :\n{cve_str}\n"
             f"Problèmes détectés :\n{issues_str}\n\n"
             "RÈGLES :\n"
-            "- Commence par les CVE critiques si présentes — c'est la priorité.\n"
+            "- Commence par les CVE critiques si présentes, c'est la priorité.\n"
             "- Explique ce que chaque CVE critique/haute signifie concrètement.\n"
             "- Mentionne le score et ce qui l'a fait baisser (CVE + SSL).\n"
             "- Si IP privée, explique que cet outil analyse des actifs publics.\n"

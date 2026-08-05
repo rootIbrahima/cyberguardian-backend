@@ -1,7 +1,7 @@
 """
 Notifications persistantes : contrairement à un compteur dérivé d'une requête
 live (candidatures en attente, messages non lus), chaque événement devient une
-ligne en base qui reste visible — marquée lue, jamais supprimée silencieusement.
+ligne en base qui reste visible, marquée lue, jamais supprimée silencieusement.
 """
 
 from datetime import datetime
@@ -23,7 +23,7 @@ def _now_iso() -> str:
 def creer_notification(db: Session, user_id: int, type: str, title: str,
                        body: str | None = None, link: str | None = None) -> Notification:
     """Appelée par les autres routeurs au moment de l'événement (nouveau message,
-    mission acceptée, contrat signé, candidature...). Ne fait pas le commit —
+    mission acceptée, contrat signé, candidature...). Ne fait pas le commit :
     l'appelant commit avec le reste de sa transaction."""
     notif = Notification(
         user_id    = user_id,

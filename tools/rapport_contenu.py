@@ -5,7 +5,7 @@ classement par horizon de traitement.
 
 Séparé de la mise en page (generate_pdf.py) parce que ce sont deux métiers
 distincts : ici on décide *quoi* dire et avec quelle priorité, là-bas *comment*
-l'afficher. Tout est déterministe et dérivé des résultats du scan — aucune
+l'afficher. Tout est déterministe et dérivé des résultats du scan, aucune
 donnée inventée, aucun appel réseau.
 """
 
@@ -95,9 +95,9 @@ _DEFAUT = ("Écart de configuration relevé par rapport aux bonnes pratiques de 
 _HORIZON_PAR_SEVERITE = {"CRITIQUE": "immediat", "HAUT": "court_terme"}
 
 LIBELLES_HORIZON = {
-    "immediat":    "Immédiat — sous 24 à 48 heures",
-    "court_terme": "Court terme — sous un mois",
-    "fond":        "Travail de fond — prochain trimestre",
+    "immediat":    "Immédiat : sous 24 à 48 heures",
+    "court_terme": "Court terme : sous un mois",
+    "fond":        "Travail de fond : prochain trimestre",
 }
 
 

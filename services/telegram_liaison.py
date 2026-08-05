@@ -2,7 +2,7 @@
 Service de liaison Telegram.
 Telegram identifie un utilisateur par son chat_id (jamais par numéro). La
 liaison se fait par un code à usage unique généré depuis l'interface web,
-puis envoyé au bot — ce qui prouve que la même personne contrôle le compte
+puis envoyé au bot, ce qui prouve que la même personne contrôle le compte
 CyberGuardian et le compte Telegram. Le backend reste maître des données :
 Hermes Agent / le bot interrogent l'API, ils ne stockent rien.
 """

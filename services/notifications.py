@@ -1,5 +1,5 @@
 """
-Service de notification — couche d'abstraction au-dessus d'Apprise.
+Service de notification : couche d'abstraction au-dessus d'Apprise.
 Découple le code métier (remédiation, missions, candidatures...) du canal de
 notification réellement utilisé. Aujourd'hui, seul Telegram est configuré (le
 chat_id de l'utilisateur est résolu dynamiquement) ; ajouter un canal
@@ -23,7 +23,7 @@ def _canaux_statiques() -> list[str]:
 def notifier_utilisateur(user_id: int, titre: str, message: str, db: Session) -> bool:
     """Pousse une notification à un utilisateur sur tous ses canaux disponibles :
     Telegram s'il a lié son compte, plus les canaux statiques de APPRISE_URLS.
-    Renvoie False si aucun canal n'est joignable — l'appelant ne doit jamais
+    Renvoie False si aucun canal n'est joignable, l'appelant ne doit jamais
     bloquer sur ce retour (la notification est un à-côté, pas le résultat métier)."""
     apobj = apprise.Apprise()
 

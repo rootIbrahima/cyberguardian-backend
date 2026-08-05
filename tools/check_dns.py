@@ -1,5 +1,5 @@
 """
-Outil #1 du CDC — check_dns()
+Outil #1 du CDC : check_dns()
 Vérifie la posture DNS d'un domaine : SPF, DMARC, DKIM, MX et DNSSEC.
 Pèse 25 pts dans le score global (critère le plus lourd : SPF + DMARC
 protègent directement contre l'usurpation d'email, DNSSEC contre
@@ -78,14 +78,14 @@ def check_dns(target: str) -> DNSResult:
     except Exception:
         pass
 
-    # SPF — enregistrement TXT commençant par v=spf1
+    # SPF : enregistrement TXT commençant par v=spf1
     for txt in _query_txt(domain, resolver):
         if txt.lower().startswith("v=spf1"):
             result.spf_present = True
             result.spf_record = txt
             break
 
-    # DMARC — TXT sur _dmarc.<domaine>
+    # DMARC : TXT sur _dmarc.<domaine>
     for txt in _query_txt(f"_dmarc.{domain}", resolver):
         if txt.lower().startswith("v=dmarc1"):
             result.dmarc_present = True
@@ -95,7 +95,7 @@ def check_dns(target: str) -> DNSResult:
                     result.dmarc_policy = part[2:].lower()
             break
 
-    # DKIM — TXT sur <selecteur>._domainkey.<domaine>, sélecteurs courants
+    # DKIM : TXT sur <selecteur>._domainkey.<domaine>, sélecteurs courants
     for selector in DKIM_SELECTORS:
         for txt in _query_txt(f"{selector}._domainkey.{domain}", resolver):
             if "v=dkim1" in txt.lower() or "k=rsa" in txt.lower():
@@ -105,7 +105,7 @@ def check_dns(target: str) -> DNSResult:
         if result.dkim_present:
             break
 
-    # DNSSEC — présence d'enregistrements DNSKEY (zone signée)
+    # DNSSEC : présence d'enregistrements DNSKEY (zone signée)
     try:
         answers = resolver.resolve(domain, "DNSKEY")
         result.dnssec_enabled = len(answers) > 0

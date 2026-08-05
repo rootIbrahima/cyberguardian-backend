@@ -1,5 +1,5 @@
 """
-Outil #5 du CDC — scan_headers()
+Outil #5 du CDC : scan_headers()
 Analyse les en-têtes de sécurité HTTP d'un site : CSP, HSTS, X-Frame-Options,
 X-Content-Type-Options, Referrer-Policy, Permissions-Policy.
 Pèse 20 pts dans le score global (protection XSS, clickjacking, sniffing).
@@ -71,7 +71,7 @@ def scan_headers(target: str, timeout: int = 10) -> HeadersResult:
                 f"{scheme}://{host}",
                 timeout=timeout,
                 follow_redirects=True,
-                verify=False,  # nosec B501 — intentionnel : scanner des sites au certificat invalide
+                verify=False,  # nosec B501, intentionnel : scanner des sites au certificat invalide
             )
             break
         except Exception as e:
@@ -108,7 +108,7 @@ def scan_headers(target: str, timeout: int = 10) -> HeadersResult:
                 "tool":     "scan_headers()",
             })
 
-    # Site servi en HTTP uniquement — les en-têtes ne protègent rien sans TLS
+    # Site servi en HTTP uniquement : les en-têtes ne protègent rien sans TLS
     if result.final_url and result.final_url.startswith("http://"):
         result.issues.append({
             "severity": "CRITIQUE",

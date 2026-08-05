@@ -1,5 +1,5 @@
 """
-Outil #2 du CDC — check_whois()
+Outil #2 du CDC : check_whois()
 Interroge la base WHOIS d'un domaine : registrar, propriétaire, dates de
 création et d'expiration. Signale une expiration proche ou dépassée, qui
 expose le domaine à un détournement (un domaine expiré peut être racheté
@@ -37,7 +37,7 @@ def _extract_domain(target: str) -> str:
 
 
 def _first(value):
-    """python-whois renvoie parfois une liste — on prend la première valeur."""
+    """python-whois renvoie parfois une liste, on prend la première valeur."""
     if isinstance(value, (list, tuple)):
         return value[0] if value else None
     return value
@@ -79,7 +79,7 @@ def check_whois(target: str) -> WhoisResult:
 
     exp = _first(data.get("expiration_date"))
     if isinstance(exp, datetime):
-        # Certains registrars renvoient une date avec fuseau — on normalise en naïf
+        # Certains registrars renvoient une date avec fuseau, on normalise en naïf
         if exp.tzinfo is not None:
             exp = exp.replace(tzinfo=None)
         result.days_until_expiry = (exp - datetime.now()).days

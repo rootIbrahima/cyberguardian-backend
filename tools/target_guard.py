@@ -1,5 +1,5 @@
 """
-Garde-fou des cibles de scan (CDC §7.1 — outils non intrusifs et périmètre
+Garde-fou des cibles de scan (CDC §7.1, outils non intrusifs et périmètre
 strictement externe).
 
 CyberGuardian évalue la surface d'attaque EXTERNE publique. Sans contrôle, une
@@ -19,7 +19,7 @@ import socket
 
 
 class CibleInterdite(Exception):
-    """Cible interne, réservée ou non résolvable — le scan est refusé."""
+    """Cible interne, réservée ou non résolvable : le scan est refusé."""
 
 
 def extraire_hote(target: str, garder_port: bool = False) -> str:
@@ -72,7 +72,7 @@ def resoudre_et_valider(target: str) -> tuple[str, str]:
     if not hote:
         raise CibleInterdite("Aucune cible fournie.")
 
-    # Cas 1 — adresse IP saisie directement (pas de résolution nécessaire)
+    # Cas 1 : adresse IP saisie directement (pas de résolution nécessaire)
     ip_litterale = None
     try:
         ip_litterale = ipaddress.ip_address(hote)
@@ -82,7 +82,7 @@ def resoudre_et_valider(target: str) -> tuple[str, str]:
         _verifier_ip(ip_litterale)
         return hote, str(ip_litterale)
 
-    # Cas 2 — nom de domaine : toutes les adresses résolues doivent être publiques
+    # Cas 2 : nom de domaine : toutes les adresses résolues doivent être publiques
     try:
         infos = socket.getaddrinfo(hote, None)
     except socket.gaierror:

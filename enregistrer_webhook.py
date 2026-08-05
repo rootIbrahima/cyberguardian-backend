@@ -1,7 +1,7 @@
 """
 Enregistre le webhook Telegram avec son secret d'authentification.
 
-À rejouer à chaque fois que l'URL publique change — sur l'offre gratuite ngrok,
+À rejouer à chaque fois que l'URL publique change : sur l'offre gratuite ngrok,
 c'est-à-dire à chaque redémarrage du tunnel. L'URL est détectée automatiquement
 via l'API locale de ngrok, ou passée en argument.
 
@@ -38,7 +38,7 @@ def main() -> int:
     secret = config.get("TELEGRAM_WEBHOOK_SECRET", "")
 
     if not token:
-        print("TELEGRAM_BOT_TOKEN absent de .env — impossible de continuer.")
+        print("TELEGRAM_BOT_TOKEN absent de .env : impossible de continuer.")
         return 1
     if not secret:
         print("TELEGRAM_WEBHOOK_SECRET absent de .env : le webhook accepterait "

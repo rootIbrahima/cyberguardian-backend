@@ -1,5 +1,5 @@
 """
-CyberGuardian — Serveur MCP (FastMCP)
+CyberGuardian : Serveur MCP (FastMCP)
 
 Expose les outils de scan EASM + GitHub au protocole MCP pour qu'un LLM
 (Ollama, Claude Desktop, MCP Inspector...) puisse les orchestrer lui-même.
@@ -45,7 +45,7 @@ mcp = FastMCP(
 )
 
 
-# ── Outil 1 (CDC) — DNS anti-phishing ─────────────────────────────────────────
+# ── Outil 1 (CDC) : DNS anti-phishing ─────────────────────────────────────────
 
 @mcp.tool
 def check_dns_records(domain: str) -> dict:
@@ -57,7 +57,7 @@ def check_dns_records(domain: str) -> dict:
     return asdict(_check_dns(domain))
 
 
-# ── Outil 2 (CDC) — WHOIS ─────────────────────────────────────────────────────
+# ── Outil 2 (CDC) : WHOIS ─────────────────────────────────────────────────────
 
 @mcp.tool
 def check_domain_whois(domain: str) -> dict:
@@ -69,7 +69,7 @@ def check_domain_whois(domain: str) -> dict:
     return asdict(_check_whois(domain))
 
 
-# ── Outil 5 (CDC) — En-têtes de sécurité HTTP ─────────────────────────────────
+# ── Outil 5 (CDC) : En-têtes de sécurité HTTP ─────────────────────────────────
 
 @mcp.tool
 def scan_http_headers(target: str) -> dict:
@@ -81,7 +81,7 @@ def scan_http_headers(target: str) -> dict:
     return asdict(_scan_headers(target))
 
 
-# ── Outil 9 (CDC) — Scan de ports réseau ──────────────────────────────────────
+# ── Outil 9 (CDC) : Scan de ports réseau ──────────────────────────────────────
 
 @mcp.tool
 def scan_network_ports(target: str) -> dict:
@@ -98,7 +98,7 @@ def scan_network_ports(target: str) -> dict:
     return asdict(_check_ports(target))
 
 
-# ── Outil 10 (CDC) — Score global pondéré ─────────────────────────────────────
+# ── Outil 10 (CDC) : Score global pondéré ─────────────────────────────────────
 
 @mcp.tool
 def calculate_global_score(dns_score: int | None = None,
@@ -115,7 +115,7 @@ def calculate_global_score(dns_score: int | None = None,
                              "headers": headers_score, "ports": ports_score})
 
 
-# ── Outil 3 (CDC) — SSL/TLS ───────────────────────────────────────────────────
+# ── Outil 3 (CDC) : SSL/TLS ───────────────────────────────────────────────────
 
 @mcp.tool
 def check_ssl_certificate(target: str) -> dict:
@@ -126,7 +126,7 @@ def check_ssl_certificate(target: str) -> dict:
     return asdict(_check_ssl(target))
 
 
-# ── CVE — configuration TLS et service exposé ────────────────────────────────
+# ── CVE : configuration TLS et service exposé ────────────────────────────────
 
 @mcp.tool
 def check_tls_cves(tls_version: str, cipher_suite: str) -> list:
@@ -146,7 +146,7 @@ def check_service_cves(target: str) -> dict:
     return {"server_banner": banner, "cves": cves}
 
 
-# ── EPSS — corrélation gravité (CVSS) × probabilité d'exploitation ────────────
+# ── EPSS : corrélation gravité (CVSS) × probabilité d'exploitation ────────────
 
 @mcp.tool
 def correlate_cvss_epss(cve_ids: list[str], cvss_scores: list[float] | None = None) -> dict:
@@ -173,7 +173,7 @@ def correlate_cvss_epss(cve_ids: list[str], cvss_scores: list[float] | None = No
     return {"results": results}
 
 
-# ── Outil 4 (CDC) — Orchestration EASM complète ──────────────────────────────
+# ── Outil 4 (CDC) : Orchestration EASM complète ──────────────────────────────
 
 @mcp.tool
 def analyze_security(target: str) -> dict:
@@ -232,13 +232,13 @@ def analyze_security(target: str) -> dict:
     }
 
 
-# ── Outil 12 (CDC) — Scan GitHub ──────────────────────────────────────────────
+# ── Outil 12 (CDC) : Scan GitHub ──────────────────────────────────────────────
 
 @mcp.tool
 def get_github_info(repo_url: str) -> dict:
     """Récupère les métadonnées publiques d'un repository GitHub : description,
     langage principal, stars, forks, dernière mise à jour. Ne clone pas le
-    repository — utile pour un aperçu rapide avant un scan complet."""
+    repository, utile pour un aperçu rapide avant un scan complet."""
     return _github_info(repo_url)
 
 
@@ -247,7 +247,7 @@ def scan_github_repo(repo_url: str) -> dict:
     """Analyse de sécurité complète d'un repository GitHub PUBLIC : clone
     temporaire puis analyse statique du code (Bandit pour Python, npm audit
     pour JavaScript/TypeScript), vérification des dépendances contre les CVE
-    connues (Safety) et détection de secrets exposés — clés API, tokens, mots
+    connues (Safety) et détection de secrets exposés, clés API, tokens, mots
     de passe en dur (TruffleHog). Retourne les résultats détaillés par outil
     et un score bonus sur 30 points. Durée : 20 à 30 secondes."""
     return _scan_github(repo_url)

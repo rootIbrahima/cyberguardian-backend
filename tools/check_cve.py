@@ -4,23 +4,23 @@ import warnings
 import httpx
 
 # Suppress urllib3 InsecureRequestWarning: banner fetching targets arbitrary hosts
-# that may use self-signed or expired certificates — verify=False is intentional.
+# that may use self-signed or expired certificates, verify=False is intentional.
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
 TLS_CVES = {
     "TLSv1": [
-        {"id": "CVE-2014-3566", "severity": "HIGH",   "cvss": 3.4, "title": "POODLE — Attaque par oracle de bourrage sur TLS 1.0"},
-        {"id": "CVE-2011-3389", "severity": "MEDIUM",  "cvss": 4.3, "title": "BEAST — Exploitation du chiffrement CBC en TLS 1.0"},
+        {"id": "CVE-2014-3566", "severity": "HIGH",   "cvss": 3.4, "title": "POODLE : Attaque par oracle de bourrage sur TLS 1.0"},
+        {"id": "CVE-2011-3389", "severity": "MEDIUM",  "cvss": 4.3, "title": "BEAST : Exploitation du chiffrement CBC en TLS 1.0"},
     ],
     "TLSv1.1": [
-        {"id": "CVE-2015-0204", "severity": "MEDIUM",  "cvss": 4.3, "title": "FREAK — Degradation vers les suites de chiffrement RSA export"},
+        {"id": "CVE-2015-0204", "severity": "MEDIUM",  "cvss": 4.3, "title": "FREAK : Degradation vers les suites de chiffrement RSA export"},
     ],
 }
 
 CIPHER_CVES = {
-    "RC4":  {"id": "CVE-2015-2808", "severity": "MEDIUM", "cvss": 4.3, "title": "Bar Mitzvah — Biais statistiques exploitables dans RC4"},
-    "DES":  {"id": "CVE-2016-2183", "severity": "HIGH",   "cvss": 7.5, "title": "SWEET32 — Attaque par anniversaire sur DES/3DES (64 bits)"},
-    "NULL": {"id": "CVE-2014-0224", "severity": "HIGH",   "cvss": 6.8, "title": "CCS Injection — Negociation de chiffrement NULL exploitable"},
+    "RC4":  {"id": "CVE-2015-2808", "severity": "MEDIUM", "cvss": 4.3, "title": "Bar Mitzvah : Biais statistiques exploitables dans RC4"},
+    "DES":  {"id": "CVE-2016-2183", "severity": "HIGH",   "cvss": 7.5, "title": "SWEET32 : Attaque par anniversaire sur DES/3DES (64 bits)"},
+    "NULL": {"id": "CVE-2014-0224", "severity": "HIGH",   "cvss": 6.8, "title": "CCS Injection : Negociation de chiffrement NULL exploitable"},
 }
 
 
@@ -44,12 +44,12 @@ def _get_server_banner(target: str) -> str:
                 f"{scheme}://{host}",
                 timeout=5,
                 follow_redirects=True,
-                verify=False,  # nosec B501 — intentional: scanner must reach hosts with invalid certs
+                verify=False,  # nosec B501, intentional: scanner must reach hosts with invalid certs
             )
             banner = resp.headers.get("server", "")
             if banner:
                 return banner
-        except Exception:  # nosec B112 — skip scheme (https/http) on connection failure
+        except Exception:  # nosec B112, skip scheme (https/http) on connection failure
             continue
     return ""
 
@@ -57,7 +57,7 @@ def _get_server_banner(target: str) -> str:
 def _parse_banner(banner: str) -> str:
     """Retourne 'Nom version' si la bannière contient une version, sinon ''.
     Sans version (ex: 'Apache' seul), la recherche NVD par mot-clé renvoie
-    des CVE anciennes non pertinentes — on ne cherche pas."""
+    des CVE anciennes non pertinentes, on ne cherche pas."""
     match = re.match(r'([A-Za-z][A-Za-z\-]+)/(\d+\.\d+[\.\d]*)', banner)
     if match:
         return f"{match.group(1)} {match.group(2)}"

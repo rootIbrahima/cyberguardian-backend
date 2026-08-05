@@ -1,5 +1,5 @@
 """
-Outil #10 du CDC — calculate_score()
+Outil #10 du CDC : calculate_score()
 Score global /100 pondéré selon le CDC §4.3 :
     DNS 25 pts · SSL/TLS 25 pts · Headers HTTP 20 pts · Ports 15 pts · Réputation 15 pts
 
@@ -13,8 +13,8 @@ WEIGHTS = {
     "dns":        25,
     "ssl":        25,
     "headers":    20,
-    "ports":      15,   # scan_ports() — à venir
-    "reputation": 15,   # scan_virustotal() + scan_abuseipdb() — à venir
+    "ports":      15,   # scan_ports(), à venir
+    "reputation": 15,   # scan_virustotal() + scan_abuseipdb(), à venir
 }
 
 LABELS = {

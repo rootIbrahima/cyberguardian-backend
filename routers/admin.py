@@ -1,5 +1,5 @@
 """
-Administration : validation des candidatures experts (CNI + diplôme — CDC §4.2),
+Administration : validation des candidatures experts (CNI + diplôme, CDC §4.2),
 statistiques de la plateforme et consultation des pièces justificatives.
 """
 
@@ -58,7 +58,7 @@ def approve_expert(
     creer_notification(
         db, profile.user_id, "expert_decision",
         title = "Candidature acceptée",
-        body  = "Vous êtes désormais expert validé — votre profil apparaît dans l'annuaire.",
+        body  = "Vous êtes désormais expert validé : votre profil apparaît dans l'annuaire.",
         link  = "/dashboard",
     )
     db.commit()

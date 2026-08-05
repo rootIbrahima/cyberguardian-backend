@@ -1,8 +1,8 @@
 """
-Remédiation assistée — correcteur déterministe + ouverture de Pull Request.
+Remédiation assistée : correcteur déterministe + ouverture de Pull Request.
 Pour un scan GitHub d'un client ayant autorisé son dépôt, on monte les
 dépendances vulnérables détectées vers leur dernière version stable et on ouvre
-une Pull Request. L'agent propose ; le client relit et fusionne — jamais de
+une Pull Request. L'agent propose ; le client relit et fusionne, jamais de
 push direct. C'est le même patron que Dependabot, intégré à la chaîne EASM.
 """
 
@@ -100,7 +100,7 @@ def _ouvrir_pr(token: str, slug: str, chemin: str, nouveau: str, file_sha: str,
                  + "\n".join(f"- **{c['paquet']}** : {c['avant']} → {c['apres']}" for c in changements)
                  + "\n\nRelisez puis fusionnez si tout vous convient.")
         r = httpx.post(f"{GH_API}/repos/{slug}/pulls", headers=h, timeout=15,
-                       json={"title": "Correctif de sécurité — dépendances vulnérables",
+                       json={"title": "Correctif de sécurité : dépendances vulnérables",
                              "head": branche, "base": base_branch, "body": corps})
         if r.status_code not in (200, 201):
             return None
@@ -160,18 +160,18 @@ def proposer_correction(user_id: int, repo_target: str, scan_dict: dict, db: Ses
         return {"ok": False, "message": "GitHub a refusé l'ouverture de la Pull Request."}
 
     # Notifie le client sur tous ses canaux externes disponibles (Telegram +
-    # canaux additionnels éventuels — voir services/notifications.py) et dans
+    # canaux additionnels éventuels, voir services/notifications.py) et dans
     # la plateforme elle-même, pour ceux qui n'ont lié aucun canal externe.
     resume = "\n".join(f"• {c['paquet']} : {c['avant']} → {c['apres']}" for c in changements)
     notifier_utilisateur(
         user_id,
-        f"Correctif proposé — {slug}",
+        f"Correctif proposé : {slug}",
         f"{resume}\n\nRelisez et fusionnez la Pull Request :\n{pr_url}",
         db,
     )
     creer_notification(
         db, user_id, "remediation",
-        title = f"Correctif proposé — {slug}",
+        title = f"Correctif proposé : {slug}",
         body  = resume,
         link  = pr_url,
     )

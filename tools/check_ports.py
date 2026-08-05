@@ -1,7 +1,7 @@
 """
-Outil #9 du CDC — scan_ports()
+Outil #9 du CDC : scan_ports()
 Scan de ports réseau non intrusif (Nmap SAFE) : connexion TCP franche
-(-sT), sans découverte d'hôte (-Pn) donc sans paquet ICMP/ARP forgé — aucune
+(-sT), sans découverte d'hôte (-Pn) donc sans paquet ICMP/ARP forgé, aucune
 technique d'évasion, aucun paquet malformé. Limité à une liste restreinte de
 ports courants pour rester rapide et proportionné à un contrôle EASM passif.
 Pèse 15 pts dans le score global (exposition de services internes).
@@ -25,7 +25,7 @@ PORT_CATALOG: dict[int, tuple[str, str, str]] = {
     23:    ("Telnet",               "CRITIQUE", "Telnet transmet tout en clair, y compris les mots de passe. Désactivez-le et utilisez SSH."),
     25:    ("SMTP",                 "INFO",     "Port mail standard si ce serveur envoie des emails."),
     53:    ("DNS",                  "INFO",     "Normal pour un serveur faisant autorité sur ce domaine."),
-    80:    ("HTTP",                 "INFO",     "Port web standard — vérifiez la redirection vers HTTPS."),
+    80:    ("HTTP",                 "INFO",     "Port web standard. Vérifiez la redirection vers HTTPS."),
     110:   ("POP3",                 "MOYEN",    "POP3 sans TLS expose les identifiants. Utilisez POP3S (995)."),
     135:   ("RPC Windows",          "HAUT",     "Service RPC Windows : ne doit jamais être exposé sur Internet."),
     139:   ("NetBIOS",              "HAUT",     "Partage de fichiers Windows historique : à restreindre au réseau local."),
@@ -100,7 +100,7 @@ def check_ports(target: str) -> PortsResult:
 
     # nmap indexe ses résultats par IP résolue, pas par le nom d'hôte fourni
     # (un seul hôte scanné à la fois : le premier suffit à le retrouver). Une
-    # liste vide ici signifie presque toujours une résolution DNS impossible —
+    # liste vide ici signifie presque toujours une résolution DNS impossible,
     # un vrai résultat sur la cible, à la différence des deux cas ci-dessus.
     hosts_found = nm.all_hosts()
     if not hosts_found:
@@ -109,7 +109,7 @@ def check_ports(target: str) -> PortsResult:
         result.issues.append({
             "severity": "MOYEN",
             "color":    "yellow",
-            "title":    "Scan de ports impossible — cible non résolvable",
+            "title":    "Scan de ports impossible : cible non résolvable",
             "desc":     "Le nom ou l'adresse fourni n'a pas pu être résolu pour tester les ports réseau.",
             "tool":     "scan_ports()",
         })

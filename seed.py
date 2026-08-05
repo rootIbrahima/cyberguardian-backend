@@ -43,9 +43,9 @@ def seed():
                 )
                 db.add(user)
                 created += 1
-                print(f"  [+] {u['role']:8s} {u['email']} — mot de passe : {u['password']}")
+                print(f"  [+] {u['role']:8s} {u['email']}, mot de passe : {u['password']}")
             else:
-                print(f"  [=] {u['role']:8s} {u['email']} — déjà existant")
+                print(f"  [=] {u['role']:8s} {u['email']}, déjà existant")
         db.commit()
 
         for email, p in EXPERT_PROFILES.items():

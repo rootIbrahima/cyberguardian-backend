@@ -1,5 +1,5 @@
 """
-Webhook Telegram — reçoit messages et appuis sur boutons (callbacks).
+Webhook Telegram : reçoit messages et appuis sur boutons (callbacks).
 - /start <code> : liaison du compte
 - scans / statut / problèmes / aide : commandes directes (sans IA, instantanées)
 - boutons inline : Mes scans · Dernier score · Derniers problèmes · Contacter un expert
@@ -65,10 +65,10 @@ LIAISON_OK = (
 
 AIDE = (
     "<b>Que puis-je faire pour vous ?</b>\n\n"
-    "• <b>scans</b> — choisir parmi vos scans\n"
-    "• <b>statut</b> — score de votre dernier scan\n"
-    "• <b>problèmes</b> — problèmes de votre dernier scan\n"
-    "• <b>aide</b> — affiche ce message\n\n"
+    "• <b>scans</b>, choisir parmi vos scans\n"
+    "• <b>statut</b>, score de votre dernier scan\n"
+    "• <b>problèmes</b>, problèmes de votre dernier scan\n"
+    "• <b>aide</b>, affiche ce message\n\n"
     "Posez aussi vos questions en langage naturel (ex. « comment corriger le HSTS ? »)."
 )
 
@@ -208,7 +208,7 @@ def _lister_scans(chat_id: str, user_id: int, db: Session):
         return
     boutons = [[{"text": f"{d['target'][:32]} · {d['score']}/100", "data": f"scan:{d['id']}"}]
                for d in (s.to_dict() for s in scans)]
-    envoyer_clavier(chat_id, f"🗂 <b>Vos scans récents</b> ({len(scans)}) — choisissez-en un :", boutons)
+    envoyer_clavier(chat_id, f"🗂 <b>Vos scans récents</b> ({len(scans)}), choisissez-en un :", boutons)
 
 
 def _envoyer_statut(chat_id: str, user_id: int, db: Session, scan_id=None):
@@ -217,7 +217,7 @@ def _envoyer_statut(chat_id: str, user_id: int, db: Session, scan_id=None):
         envoyer_message_telegram(chat_id, "Scan introuvable pour votre compte.")
         return
     d = scan.to_dict()
-    suffixe = "" if scan_id else "  (dernier scan — tapez « scans » pour en choisir un autre)"
+    suffixe = "" if scan_id else "  (dernier scan, tapez « scans » pour en choisir un autre)"
     envoyer_clavier(
         chat_id,
         f"📊 <b>{d['target']}</b>\nScore : <b>{d['score']}/100</b>\n"
@@ -227,7 +227,7 @@ def _envoyer_statut(chat_id: str, user_id: int, db: Session, scan_id=None):
 
 
 def _lister_problemes(chat_id: str, user_id: int, db: Session, scan_id=None):
-    """Liste exhaustive des problèmes d'un scan, triés par sévérité —
+    """Liste exhaustive des problèmes d'un scan, triés par sévérité :
     sans IA : instantané et toujours complet."""
     scan = _scan_du_client(user_id, db, scan_id)
     if not scan:
@@ -237,11 +237,11 @@ def _lister_problemes(chat_id: str, user_id: int, db: Session, scan_id=None):
     issues = d.get("issues", [])
     if not issues:
         envoyer_message_telegram(
-            chat_id, f"✅ Aucun problème détecté sur {d['target']} — bonne posture de sécurité.")
+            chat_id, f"✅ Aucun problème détecté sur {d['target']}, bonne posture de sécurité.")
         return
 
     issues = sorted(issues, key=lambda i: _ORDRE_SEV.get((i.get("severity") or "").upper(), 5))
-    lignes = [f"📋 <b>{d['target']}</b> — {len(issues)} problème(s) détecté(s) :\n"]
+    lignes = [f"📋 <b>{d['target']}</b>, {len(issues)} problème(s) détecté(s) :\n"]
     for n, iss in enumerate(issues, 1):
         sev = (iss.get("severity") or "").upper()
         lignes.append(f"{n}. [{sev}] {iss.get('title', '')}")

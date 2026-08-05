@@ -1,9 +1,9 @@
 """
 Messagerie interne client-expert (CDC §4.7) avec accès progressif en 3 niveaux :
-    Niveau 1 — demande reçue (score global + nombre de failles)
-    Niveau 2 — mission acceptée (l'expert répond → score détaillé par catégorie)
-    Niveau 3 — contrat signé (rapport complet, accès 48h)
-Polling côté frontend toutes les 5 secondes — pas de WebSocket.
+    Niveau 1 : demande reçue (score global + nombre de failles)
+    Niveau 2 : mission acceptée (l'expert répond → score détaillé par catégorie)
+    Niveau 3 : contrat signé (rapport complet, accès 48h)
+Polling côté frontend toutes les 5 secondes, pas de WebSocket.
 """
 
 from datetime import datetime, timedelta
@@ -50,7 +50,7 @@ def _humanize(iso: str | None) -> str:
 
 
 def _conv_to_dict(conv: Conversation, viewer: User) -> dict:
-    """Format attendu par MessagesPage.jsx — l'interlocuteur affiché dépend du rôle.
+    """Format attendu par MessagesPage.jsx, l'interlocuteur affiché dépend du rôle.
     La clé s'appelle "expert" côté frontend mais contient l'interlocuteur :
     l'expert pour un client, le client pour un expert."""
     is_client = viewer.id == conv.client_id
@@ -277,7 +277,7 @@ def send_message(
     current_user: User    = Depends(get_current_user),
 ):
     conv = _get_conv_or_404(conv_id, db, current_user)
-    # L'admin supervise en lecture seule — seuls les participants écrivent
+    # L'admin supervise en lecture seule, seuls les participants écrivent
     if current_user.id not in (conv.client_id, conv.expert_id):
         raise HTTPException(status_code=403, detail="Seuls les participants peuvent écrire")
     text = body.text.strip()
@@ -296,7 +296,7 @@ def send_message(
     dest_id = conv.expert_id if current_user.id == conv.client_id else conv.client_id
     creer_notification(
         db, dest_id, "message",
-        title = f"Nouveau message — {conv.subject}",
+        title = f"Nouveau message : {conv.subject}",
         body  = text[:120],
         link  = "/messages",
     )
@@ -307,12 +307,12 @@ def send_message(
         db.add(Message(
             conversation_id = conv.id,
             sender_id       = None,
-            text            = "Mission acceptée — l'expert a maintenant accès au score détaillé par catégorie (Niveau 2).",
+            text            = "Mission acceptée : l'expert a maintenant accès au score détaillé par catégorie (Niveau 2).",
             created_at      = _now_iso(),
         ))
         creer_notification(
             db, conv.client_id, "mission_level",
-            title = f"Mission acceptée — {conv.subject}",
+            title = f"Mission acceptée : {conv.subject}",
             body  = "L'expert a accepté votre demande et accède au score détaillé.",
             link  = "/messages",
         )
@@ -340,7 +340,7 @@ def sign_contract(
     db.add(Message(
         conversation_id = conv.id,
         sender_id       = None,
-        text            = "Contrat numérique signé — l'expert a accès au rapport complet (Niveau 3) pendant 48h.",
+        text            = "Contrat numérique signé : l'expert a accès au rapport complet (Niveau 3) pendant 48h.",
         created_at      = _now_iso(),
     ))
     # Une mission de plus au compteur de l'expert
@@ -349,7 +349,7 @@ def sign_contract(
         profile.missions = (profile.missions or 0) + 1
     creer_notification(
         db, conv.expert_id, "contract",
-        title = f"Contrat signé — {conv.subject}",
+        title = f"Contrat signé : {conv.subject}",
         body  = "Vous avez accès au rapport complet pendant 48h.",
         link  = "/messages",
     )
@@ -406,7 +406,7 @@ def rate_expert(
     ))
     creer_notification(
         db, conv.expert_id, "rating",
-        title = f"Nouvelle évaluation — {body.stars}/5",
+        title = f"Nouvelle évaluation : {body.stars}/5",
         body  = f"Mission « {conv.subject} » notée par le client.",
         link  = "/messages",
     )

@@ -31,7 +31,7 @@ class Scan(Base):
     vulns      = Column(Integer, default=0)
     cve        = Column(Integer, default=0)
     date       = Column(String)                        # libellé d'affichage : « 27 jul. 2026, 12:09 »
-    created_at = Column(String, index=True)            # ISO — comparable, sert au quota journalier
+    created_at = Column(String, index=True)            # ISO, comparable, sert au quota journalier
     results    = Column(JSON, default=dict)
     issues     = Column(JSON, default=list)
     conversations = Column(JSON, default=list)
@@ -117,9 +117,9 @@ class Conversation(Base):
     expert_id        = Column(Integer, ForeignKey("users.id"), nullable=False)
     subject          = Column(String, nullable=False)    # cible du scan concerné
     level            = Column(Integer, default=1)        # 1 demande | 2 mission | 3 contrat
-    mission_start    = Column(String, nullable=True)     # ISO — début de l'accès 48h (niveau 3)
+    mission_start    = Column(String, nullable=True)     # ISO, début de l'accès 48h (niveau 3)
     rating           = Column(Integer, nullable=True)    # note du client (1-5) après mission
-    client_last_read = Column(String, nullable=True)     # ISO — pour le compteur non-lus
+    client_last_read = Column(String, nullable=True)     # ISO, pour le compteur non-lus
     expert_last_read = Column(String, nullable=True)
     created_at       = Column(String)
 
@@ -154,7 +154,7 @@ class Notification(Base):
     title      = Column(String, nullable=False)
     body       = Column(String)
     link       = Column(String)                    # route frontend à ouvrir au clic
-    read_at    = Column(String, nullable=True)      # ISO — NULL = non lue
+    read_at    = Column(String, nullable=True)      # ISO, NULL = non lue
     created_at = Column(String)                     # ISO
 
     user = relationship("User")

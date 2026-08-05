@@ -1,5 +1,5 @@
 """
-Chiffrement symétrique des secrets stockés en base (CDC §6.2 — aucun secret en
+Chiffrement symétrique des secrets stockés en base (CDC §6.2, aucun secret en
 clair). Concerne aujourd'hui le jeton OAuth GitHub : sa portée public_repo
 autorise l'écriture sur les dépôts du client, une fuite de la base donnerait
 donc un accès en modification à leur code. Le jeton est chiffré au repos et

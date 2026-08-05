@@ -106,7 +106,7 @@ def apply(
     cni_path     = _save_upload(cni_file,     f"{current_user.id}_cni")     if cni_file     else None
     diploma_path = _save_upload(diploma_file, f"{current_user.id}_diplome") if diploma_file else None
 
-    if existing:   # candidature rejetée précédemment — on la met à jour
+    if existing:   # candidature rejetée précédemment, on la met à jour
         profile = existing
         profile.status = "pending"
     else:
@@ -126,7 +126,7 @@ def apply(
     for admin in db.query(User).filter(User.role == "admin").all():
         creer_notification(
             db, admin.id, "expert_pending",
-            title = f"Nouvelle candidature — {current_user.name}",
+            title = f"Nouvelle candidature : {current_user.name}",
             body  = specialty or "Spécialité non précisée",
             link  = "/admin",
         )

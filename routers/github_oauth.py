@@ -1,8 +1,8 @@
 """
-OAuth GitHub — « Connecter GitHub » et consentement de correction assistée.
+OAuth GitHub : « Connecter GitHub » et consentement de correction assistée.
 Le client autorise CyberGuardian une fois (portée public_repo, moindre
 privilège), puis autorise explicitement la correction d'un dépôt précis.
-L'agent s'appuiera sur ce jeton pour ouvrir une Pull Request — jamais de push
+L'agent s'appuiera sur ce jeton pour ouvrir une Pull Request, jamais de push
 direct. Le consentement est explicite, par dépôt, et révocable.
 """
 
