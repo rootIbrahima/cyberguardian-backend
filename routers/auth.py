@@ -50,6 +50,11 @@ def login(
         raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Compte désactivé")
+    # Migration transparente des comptes encore hachés en sha256_crypt : le mot
+    # de passe en clair n'est disponible qu'ici, à la connexion.
+    if auth_utils.besoin_rehachage(user.password_hash):
+        user.password_hash = auth_utils.hash_password(form.password)
+        db.commit()
     return _token_response(user)
 
 

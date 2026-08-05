@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+from passlib.hash import sha256_crypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
@@ -12,16 +13,41 @@ from config import JWT_SECRET_KEY as SECRET_KEY
 ALGORITHM  = "HS256"
 TOKEN_EXPIRE_DAYS = 7
 
-pwd_context   = CryptContext(schemes=["sha256_crypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token", auto_error=False)
+
+# bcrypt ne prend en compte que les 72 premiers octets du mot de passe.
+_BCRYPT_MAX_OCTETS = 72
+_PREFIXES_BCRYPT   = ("$2a$", "$2b$", "$2y$")
+
+# bcrypt est appelé directement plutôt que via passlib : passlib 1.7.4 lit
+# bcrypt.__about__, supprimé depuis bcrypt 4.1, et lève une erreur au premier
+# hachage. passlib reste utilisé pour vérifier les comptes créés avant la
+# migration, encore hachés en sha256_crypt.
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    octets = password.encode("utf-8")[:_BCRYPT_MAX_OCTETS]
+    return bcrypt.hashpw(octets, bcrypt.gensalt()).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    if not hashed:
+        return False
+    octets = plain.encode("utf-8")[:_BCRYPT_MAX_OCTETS]
+    if hashed.startswith(_PREFIXES_BCRYPT):
+        try:
+            return bcrypt.checkpw(octets, hashed.encode())
+        except ValueError:
+            return False
+    try:
+        return sha256_crypt.verify(plain, hashed)   # compte antérieur à la migration
+    except (ValueError, TypeError):
+        return False
+
+
+def besoin_rehachage(hashed: str) -> bool:
+    """Vrai si le mot de passe est encore stocké dans l'ancien format."""
+    return not (hashed or "").startswith(_PREFIXES_BCRYPT)
 
 
 def create_token(data: dict) -> str:
