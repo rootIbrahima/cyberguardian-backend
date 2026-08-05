@@ -2,7 +2,7 @@ import json
 from dataclasses import asdict
 
 import httpx
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
@@ -10,13 +10,15 @@ from sqlalchemy.orm import Session
 
 from database import get_db, SessionLocal
 from models import Conversation, Scan, User
-from auth import get_current_user, get_current_user_optional
+from auth import get_current_user
 from tools.check_dns import check_dns
 from tools.check_whois import check_whois
 from tools.check_epss import enrich_cves
 from tools.check_ssl import check_ssl
 from tools.check_cve import check_tls_cves, check_service_cves
 from tools.scan_headers import scan_headers
+from tools.check_ports import check_ports
+from tools.target_guard import resoudre_et_valider, CibleInterdite
 from tools.calculate_score import calculate_score
 from tools.generate_pdf import generate_scan_pdf
 from tools.github_tools import scan_github
@@ -28,12 +30,41 @@ router = APIRouter(prefix="/scans", tags=["scans"])
 MOIS = ["jan", "fev", "mar", "avr", "mai", "jun",
         "jul", "aou", "sep", "oct", "nov", "dec"]
 
+# CDC §7.1 — limite le rythme des scans pour qu'un compte ne puisse pas
+# transformer la plateforme en relais de reconnaissance à haute fréquence.
+QUOTA_PAR_CIBLE_24H = 3
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _now() -> str:
     now = datetime.now()
     return f"{now.day:02d} {MOIS[now.month - 1]}. {now.year}, {now.strftime('%H:%M')}"
+
+
+def _depuis_24h() -> str:
+    return (datetime.now() - timedelta(hours=24)).isoformat(timespec="seconds")
+
+
+def _verifier_quota(db: Session, user_id: int, target: str) -> None:
+    """Refuse au-delà de QUOTA_PAR_CIBLE_24H scans d'une même cible sur 24h.
+    Les scans antérieurs à l'ajout du champ created_at ne sont pas décomptés."""
+    recents = (
+        db.query(Scan)
+        .filter(
+            Scan.user_id    == user_id,
+            Scan.target     == target,
+            Scan.created_at.isnot(None),
+            Scan.created_at >= _depuis_24h(),
+        )
+        .count()
+    )
+    if recents >= QUOTA_PAR_CIBLE_24H:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Limite atteinte : {QUOTA_PAR_CIBLE_24H} scans par jour et par cible. "
+                   "Relancez l'analyse demain ou soumettez un autre actif.",
+        )
 
 
 def _detect_asset_type(target: str) -> str:
@@ -67,9 +98,19 @@ class AskRequest(BaseModel):
 @router.post("")
 def launch_scan(
     body:         ScanRequest,
-    db:           Session      = Depends(get_db),
-    current_user: User | None  = Depends(get_current_user_optional),
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(get_current_user),
 ):
+    # Périmètre externe uniquement : une cible interne (boucle locale, réseau
+    # privé, métadonnées cloud) ferait de la plateforme un relais de scan.
+    if body.asset_type in ("domain", "url", "ip"):
+        try:
+            resoudre_et_valider(body.target)
+        except CibleInterdite as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    _verifier_quota(db, current_user.id, body.target)
+
     results = {}
     issues  = []
     all_cves      = []
@@ -105,7 +146,11 @@ def launch_scan(
         results["headers"] = asdict(headers)
         issues = issues + headers.issues
 
-        score_parts = {"ssl": ssl.score, "headers": headers.score}
+        ports = check_ports(body.target)
+        results["ports"] = asdict(ports)
+        issues = issues + ports.issues
+
+        score_parts = {"ssl": ssl.score, "headers": headers.score, "ports": ports.score}
 
         # DNS et WHOIS n'ont de sens que pour un domaine, pas une IP brute
         if body.asset_type in ("domain", "url"):
@@ -135,9 +180,10 @@ def launch_scan(
         results["score_max"]   = gh.get("max", 30)
         total_score            = gh["score"]
         all_cves               = gh["safety"].get("findings", [])
+        _sev_fr = {"LOW": "BAS", "MEDIUM": "MOYEN", "HIGH": "HAUT"}
         issues = [
             {
-                "severity": f["severity"],
+                "severity": _sev_fr.get(f["severity"], f["severity"]),
                 "title":    f["issue"],
                 "desc":     f"Fichier : {f['file']} — ligne {f['line']}",
                 "color":    "red" if f["severity"] == "HIGH" else "orange" if f["severity"] == "MEDIUM" else "yellow",
@@ -160,7 +206,7 @@ def launch_scan(
     type_labels = {"domain": "Domaine", "ip": "IP", "url": "URL", "github": "GitHub"}
 
     scan = Scan(
-        user_id    = current_user.id if current_user else None,
+        user_id    = current_user.id,
         target     = body.target,
         type       = body.asset_type,
         type_label = type_labels.get(body.asset_type, "Domaine"),
@@ -169,6 +215,7 @@ def launch_scan(
         vulns      = len(issues),
         cve        = len(all_cves),
         date       = _now(),
+        created_at = datetime.now().isoformat(timespec="seconds"),
         results    = results,
         issues     = issues,
         conversations = [],
@@ -181,13 +228,13 @@ def launch_scan(
 
 @router.get("")
 def list_scans(
-    db:           Session     = Depends(get_db),
-    current_user: User | None = Depends(get_current_user_optional),
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(get_current_user),
 ):
     q = db.query(Scan)
     # Admin voit tous les scans ; client ne voit que les siens ;
     # un expert voit aussi les scans partagés via une mission niveau 3 active
-    if current_user and current_user.role == "expert":
+    if current_user.role == "expert":
         from routers.messages import mission_active
         convs = (
             db.query(Conversation)
@@ -206,7 +253,7 @@ def list_scans(
                 if shared:
                     shared_ids.append(shared.id)
         q = q.filter((Scan.user_id == current_user.id) | Scan.id.in_(shared_ids))
-    elif current_user and current_user.role != "admin":
+    elif current_user.role != "admin":
         q = q.filter(Scan.user_id == current_user.id)
     scans = q.order_by(Scan.id.desc()).all()
     return [s.to_dict() for s in scans]
@@ -214,14 +261,20 @@ def list_scans(
 
 @router.get("/quota")
 def get_quota(
-    db:           Session     = Depends(get_db),
-    current_user: User | None = Depends(get_current_user_optional),
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(get_current_user),
 ):
-    if current_user:
-        used = db.query(Scan).filter(Scan.user_id == current_user.id).count()
-    else:
-        used = db.query(Scan).count()
-    return {"used": used, "limit": 9999}
+    """Consommation des dernières 24h et plafond appliqué par cible (CDC §7.1)."""
+    used = (
+        db.query(Scan)
+        .filter(
+            Scan.user_id    == current_user.id,
+            Scan.created_at.isnot(None),
+            Scan.created_at >= _depuis_24h(),
+        )
+        .count()
+    )
+    return {"used": used, "limit": QUOTA_PAR_CIBLE_24H, "window": "24h", "scope": "cible"}
 
 
 @router.get("/{scan_id}/status")
@@ -235,8 +288,8 @@ def get_status(scan_id: int, db: Session = Depends(get_db)):
 @router.get("/{scan_id}/pdf")
 def download_pdf(
     scan_id:      int,
-    db:           Session     = Depends(get_db),
-    current_user: User | None = Depends(get_current_user_optional),
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(get_current_user),
 ):
     scan = _get_scan_or_404(scan_id, db, current_user)
     scan_dict      = scan.to_dict()
@@ -253,8 +306,8 @@ def download_pdf(
 @router.get("/{scan_id}")
 def get_scan(
     scan_id:      int,
-    db:           Session     = Depends(get_db),
-    current_user: User | None = Depends(get_current_user_optional),
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(get_current_user),
 ):
     return _get_scan_or_404(scan_id, db, current_user).to_dict()
 
@@ -274,8 +327,8 @@ def delete_scan(
 @router.post("/{scan_id}/rerun")
 def rerun_scan(
     scan_id:      int,
-    db:           Session     = Depends(get_db),
-    current_user: User | None = Depends(get_current_user_optional),
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(get_current_user),
 ):
     scan = _get_scan_or_404(scan_id, db, current_user)
     body = ScanRequest(target=scan.target, asset_type=scan.type)
@@ -286,8 +339,8 @@ def rerun_scan(
 def ask_ai(
     scan_id:      int,
     body:         AskRequest,
-    db:           Session     = Depends(get_db),
-    current_user: User | None = Depends(get_current_user_optional),
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(get_current_user),
 ):
     scan      = _get_scan_or_404(scan_id, db, current_user)
     scan_dict = scan.to_dict()
@@ -346,6 +399,7 @@ def ask_ai(
         dns_line   = _dns_summary(results)
         whois_line = _whois_summary(results)
         headers_line = _headers_summary(results)
+        ports_line = _ports_summary(results)
         cve_critical = [c for c in cves if c.get("severity", "").upper() in ("CRITICAL", "CRITIQUE")]
         cve_high     = [c for c in cves if c.get("severity", "").upper() in ("HIGH", "HAUT")]
         cve_details  = "\n".join(
@@ -369,6 +423,7 @@ def ask_ai(
             f"{dns_line}"
             f"{whois_line}"
             f"{headers_line}"
+            f"{ports_line}"
             f"CVE détectées ({len(cves)}) dont {len(cve_critical)} CRITIQUE et {len(cve_high)} HAUT :\n"
             f"{cve_details}\n"
             f"Problèmes détectés ({len(issues)}) : {problems}\n\n"
@@ -460,6 +515,17 @@ def _headers_summary(results: dict) -> str:
     )
 
 
+def _ports_summary(results: dict) -> str:
+    ports = results.get("ports")
+    if not ports or ports.get("score") is None:
+        return ""
+    ouverts = ", ".join(f"{p['port']} ({p['service']})" for p in ports.get("open_ports", [])) or "aucun port sensible ouvert"
+    return (
+        f"Ports réseau : score={ports.get('score', 0)}/15, "
+        f"ouverts : {ouverts}\n"
+    )
+
+
 def _expert_share_active(scan: Scan, user: User, db: Session) -> bool:
     """Un expert accède au scan d'un client si une conversation sur cette cible
     est au niveau 3 (contrat signé) depuis moins de 48h (CDC §4.2)."""
@@ -478,13 +544,15 @@ def _expert_share_active(scan: Scan, user: User, db: Session) -> bool:
     return bool(conv and mission_active(conv))
 
 
-def _get_scan_or_404(scan_id: int, db: Session, current_user: User | None) -> Scan:
+def _get_scan_or_404(scan_id: int, db: Session, current_user: User) -> Scan:
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan introuvable")
     # Admin voit tout ; client ne voit que ses propres scans ;
-    # un expert voit le scan d'un client si contrat signé < 48h (niveau 3)
-    if current_user and current_user.role != "admin":
+    # un expert voit le scan d'un client si contrat signé < 48h (niveau 3).
+    # L'authentification est obligatoire : un rapport contient les failles et
+    # les ports ouverts d'un actif, il ne doit jamais être lisible anonymement.
+    if current_user.role != "admin":
         if scan.user_id and scan.user_id != current_user.id:
             if not (current_user.role == "expert"
                     and _expert_share_active(scan, current_user, db)):
@@ -559,6 +627,7 @@ def _generate_simple_explanation(scan: dict) -> str:
             f"{_dns_summary(results)}"
             f"{_whois_summary(results)}"
             f"{_headers_summary(results)}"
+            f"{_ports_summary(results)}"
             f"CVE détectées ({len(cves)}) dont {len(cve_critical)} CRITIQUE et {len(cve_high)} HAUT :\n{cve_str}\n"
             f"Problèmes détectés :\n{issues_str}\n\n"
             "RÈGLES :\n"
