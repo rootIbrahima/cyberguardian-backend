@@ -2,6 +2,18 @@ import os
 from fpdf import FPDF
 from datetime import datetime
 
+from tools.rapport_contenu import (
+    GLOSSAIRE,
+    LIBELLES_HORIZON,
+    ORDRE_SEVERITE,
+    analyser_constat,
+    compter_par_severite,
+    constats_tries,
+    niveau_posture,
+    normaliser_severite,
+    plan_remediation,
+)
+
 # Police Unicode du document (accents français rendus correctement).
 # Segoe UI est présente sur Windows ; repli sur Helvetica si introuvable.
 FONT = "CG"
@@ -69,6 +81,11 @@ def _priority_rank(priority: str | None) -> int:
 class CyberGuardianPDF(FPDF):
 
     def header(self):
+        # La couverture (page 1) n'affiche ni bandeau ni pied de page. Le test
+        # porte sur le numéro de page : fpdf dessine le pied à la fermeture de
+        # la page, bien après le rendu de son contenu.
+        if self.page_no() == 1:
+            return
         self.set_fill_color(*BLUE_DARK)
         self.rect(0, 0, 210, 18, "F")
         self.set_font(FONT, "B", 11)
@@ -82,12 +99,36 @@ class CyberGuardianPDF(FPDF):
         self.ln(14)
 
     def footer(self):
+        if self.page_no() == 1:
+            return
         self.set_y(-12)
         self.set_draw_color(*GRAY_LIGHT)
         self.line(10, self.get_y(), 200, self.get_y())
         self.set_font(FONT, "", 7.5)
         self.set_text_color(*GRAY_MID)
         self.cell(0, 8, f"CyberGuardian  ·  Page {self.page_no()}  ·  Document confidentiel", align="C")
+
+    def chapitre(self, titre: str, nouvelle_page: bool = True):
+        """Titre de premier niveau, repris automatiquement dans le sommaire."""
+        if nouvelle_page:
+            self.add_page()
+        self.start_section(_clean(titre))
+        self.set_font(FONT, "B", 15)
+        self.set_text_color(*BLUE_DARK)
+        self.set_x(10)
+        self.cell(0, 9, _clean(titre), ln=True)
+        self.set_draw_color(*BLUE_MED)
+        self.set_line_width(0.6)
+        self.line(10, self.get_y() + 1, 200, self.get_y() + 1)
+        self.set_line_width(0.2)
+        self.ln(5)
+
+    def paragraphe(self, texte: str, taille: float = 9.5, couleur=None):
+        self.set_font(FONT, "", taille)
+        self.set_text_color(*(couleur or GRAY_DARK))
+        self.set_x(12)
+        self.multi_cell(186, 5.2, _clean(texte))
+        self.ln(2)
 
     def section_title(self, title: str):
         # Style sobre : filet bleu à gauche + titre foncé + fin trait de séparation
@@ -140,6 +181,16 @@ class CyberGuardianPDF(FPDF):
         color   = _sev_color(sev)
         box_x   = 12
         box_w   = 186
+
+        # Un constat ne doit jamais être coupé en deux : sans cette réserve, le
+        # saut de page automatique survient après l'étiquette de sévérité et
+        # laisse celle-ci seule en bas de page.
+        besoin = 26 + 4.5 * (len(_clean(desc)) // 95 + 1)
+        if extra:
+            besoin += 4.5 * (len(_clean(extra)) // 95 + 1)
+        if self.get_y() + besoin > self.h - self.b_margin:
+            self.add_page()
+
         y_start = self.get_y()
 
         self.set_fill_color(*color)
@@ -197,12 +248,7 @@ def _section_ssl(pdf: CyberGuardianPDF, scan: dict):
     headers = results.get("headers")
     issues  = scan.get("issues", [])
 
-    # Détail du score pondéré par critère
-    breakdown = results.get("score_detail", {}).get("breakdown", [])
-    if breakdown:
-        pdf.section_title("Détail du score pondéré")
-        for b in breakdown:
-            pdf.score_bar(b.get("points", 0), b.get("max", 25), b.get("label", ""))
+    # Le score par critère figure au chapitre « Synthèse des constats »
 
     # DNS anti-phishing
     if dns:
@@ -305,13 +351,7 @@ def _section_ssl(pdf: CyberGuardianPDF, scan: dict):
                 tool  = "check_service_cves() / check_epss()",
             )
 
-    pdf.section_title("Recommandations")
-    for i, rec in enumerate(_build_easm_recommendations(ssl, dns, whois, headers, issues), 1):
-        pdf.set_font(FONT, "", 9)
-        pdf.set_text_color(*GRAY_DARK)
-        pdf.set_x(12)
-        pdf.multi_cell(186, 5, _clean(f"{i}. {rec}"))
-        pdf.ln(1)
+    # Les recommandations sont regroupées au chapitre « Plan de remédiation »
 
 
 # ── Section GitHub ────────────────────────────────────────────────────────────
@@ -483,15 +523,359 @@ def _section_github(pdf: CyberGuardianPDF, scan: dict):
                 tool  = "scan_trufflehog()",
             )
 
-    # ── Recommandations ───────────────────────────────────────────────────────
-    pdf.section_title("Recommandations")
-    recs = _build_github_recommendations(b_findings, s_findings, t_findings, npm_findings)
-    for i, rec in enumerate(recs, 1):
+    # Les recommandations sont regroupées au chapitre « Plan de remédiation »
+
+
+# ── Couverture, sommaire et sections transverses ─────────────────────────────
+
+def _page_couverture(pdf: CyberGuardianPDF, scan: dict, score_max: int):
+    pdf.add_page()
+
+    pdf.set_fill_color(*BLUE_DARK)
+    pdf.rect(0, 0, 210, 88, "F")
+
+    pdf.set_font(FONT, "B", 26)
+    pdf.set_text_color(*WHITE)
+    pdf.set_xy(18, 26)
+    pdf.cell(0, 12, "Rapport d'évaluation", ln=True)
+    pdf.set_xy(18, 39)
+    pdf.cell(0, 12, "de la posture de sécurité", ln=True)
+
+    pdf.set_font(FONT, "", 11)
+    pdf.set_text_color(150, 180, 215)
+    pdf.set_xy(18, 58)
+    pdf.cell(0, 6, "CyberGuardian  ·  Surface d'attaque externe", ln=True)
+
+    # Bloc d'identification du document
+    pdf.set_xy(18, 106)
+    pdf.set_font(FONT, "", 9)
+    pdf.set_text_color(*GRAY_MID)
+    pdf.cell(40, 7, "Actif analysé")
+    pdf.set_font(FONT, "B", 11)
+    pdf.set_text_color(*GRAY_DARK)
+    pdf.multi_cell(130, 7, _clean(scan.get("target", "-")))
+
+    lignes = [
+        ("Type d'analyse", "Dépôt GitHub public" if scan.get("type") == "github"
+                           else "Surface d'attaque externe (EASM)"),
+        ("Date du scan",   scan.get("date", "-")),
+        ("Édité le",       datetime.now().strftime("%d/%m/%Y à %H:%M")),
+        ("Score obtenu",   f"{scan.get('score', 0)} sur {score_max}"),
+        ("Référence",      f"CG-{scan.get('id', 0):05d}"),
+    ]
+    y = pdf.get_y() + 3
+    for cle, valeur in lignes:
+        pdf.set_xy(18, y)
+        pdf.set_font(FONT, "", 9)
+        pdf.set_text_color(*GRAY_MID)
+        pdf.cell(40, 7, _clean(cle))
+        pdf.set_font(FONT, "B", 9.5)
+        pdf.set_text_color(*GRAY_DARK)
+        pdf.cell(0, 7, _clean(str(valeur)))
+        y += 7
+
+    # Mention de confidentialité
+    pdf.set_xy(18, 246)
+    pdf.set_draw_color(*GRAY_LIGHT)
+    pdf.line(18, 244, 192, 244)
+    pdf.set_font(FONT, "", 8)
+    pdf.set_text_color(*GRAY_MID)
+    pdf.multi_cell(174, 4.5,
+        "Document confidentiel. Il contient la description de vulnérabilités affectant "
+        "l'actif analysé et ne doit être communiqué qu'aux personnes habilitées de "
+        "l'organisation concernée. Analyse réalisée sans intrusion ni exploitation, "
+        "à partir d'informations publiquement accessibles.")
+
+
+def _rendre_sommaire(pdf: CyberGuardianPDF, entrees):
+    pdf.set_font(FONT, "B", 15)
+    pdf.set_text_color(*BLUE_DARK)
+    pdf.set_x(10)
+    pdf.cell(0, 9, "Sommaire", ln=True)
+    pdf.set_draw_color(*BLUE_MED)
+    pdf.set_line_width(0.6)
+    pdf.line(10, pdf.get_y() + 1, 200, pdf.get_y() + 1)
+    pdf.set_line_width(0.2)
+    pdf.ln(7)
+
+    for e in entrees:
+        pdf.set_font(FONT, "", 10)
+        pdf.set_text_color(*GRAY_DARK)
+        pdf.set_x(14)
+        titre = _clean(e.name)
+        largeur = pdf.get_string_width(titre)
+        pdf.cell(largeur + 2, 7, titre)
+        # Points de conduite calculés sur la largeur réelle du point
+        pdf.set_text_color(*GRAY_MID)
+        restant = 182 - largeur - 12
+        largeur_point = pdf.get_string_width(".") or 1
+        pdf.cell(restant, 7, "." * max(0, int(restant / largeur_point)))
+        pdf.set_font(FONT, "B", 10)
+        pdf.set_text_color(*BLUE_MED)
+        pdf.cell(10, 7, str(e.page_number), align="R", ln=True)
+
+
+def _section_resume_executif(pdf: CyberGuardianPDF, scan: dict, score_max: int,
+                             ai_explanation: str = ""):
+    # Pas de saut : insert_toc_placeholder a déjà ouvert la page suivante
+    pdf.chapitre("1.  Résumé exécutif", nouvelle_page=False)
+
+    score   = scan.get("score", 0)
+    issues  = scan.get("issues", [])
+    compte  = compter_par_severite(issues)
+    libelle, interpretation = niveau_posture(score, score_max)
+
+    # Bandeau de score
+    couleur = _score_color(int(score / score_max * 100) if score_max else 0)
+    y = pdf.get_y()
+    pdf.set_fill_color(248, 250, 252)
+    pdf.rect(10, y, 190, 26, "F")
+    pdf.set_fill_color(*couleur)
+    pdf.rect(10, y, 3, 26, "F")
+
+    pdf.set_xy(18, y + 4)
+    pdf.set_font(FONT, "B", 24)
+    pdf.set_text_color(*couleur)
+    pdf.cell(28, 12, str(score))
+    pdf.set_font(FONT, "", 10)
+    pdf.set_text_color(*GRAY_MID)
+    pdf.cell(18, 12, f"/ {score_max}")
+    pdf.set_font(FONT, "B", 13)
+    pdf.set_text_color(*GRAY_DARK)
+    pdf.cell(0, 12, f"Posture {libelle.lower()}")
+    pdf.set_xy(18, y + 16)
+    pdf.set_font(FONT, "", 8.5)
+    pdf.set_text_color(*GRAY_MID)
+    pdf.cell(0, 6, f"{len(issues)} constat(s) — "
+                   f"{compte['CRITIQUE']} critique(s), {compte['HAUT']} élevé(s), "
+                   f"{compte['MOYEN']} moyen(s)")
+    pdf.set_y(y + 32)
+
+    pdf.paragraphe(interpretation)
+
+    # Les trois risques majeurs, traduits en conséquences concrètes
+    majeurs = [i for i in constats_tries(issues)
+               if normaliser_severite(i.get("severity")) in ("CRITIQUE", "HAUT")][:3]
+    if majeurs:
+        pdf.section_title("Risques principaux")
+        for n, iss in enumerate(majeurs, 1):
+            impact, effort, _ = analyser_constat(iss.get("title", ""), iss.get("severity"))
+            pdf.set_font(FONT, "B", 9.5)
+            pdf.set_text_color(*_sev_color(iss.get("severity", "")))
+            pdf.set_x(12)
+            pdf.cell(0, 6, _clean(f"{n}. {iss.get('title', '')}"), ln=True)
+            pdf.set_font(FONT, "", 9)
+            pdf.set_text_color(*GRAY_DARK)
+            pdf.set_x(16)
+            pdf.multi_cell(182, 5, _clean(impact))
+            pdf.set_font(FONT, "I", 8.5)
+            pdf.set_text_color(*GRAY_MID)
+            pdf.set_x(16)
+            pdf.cell(0, 5, _clean(f"Effort de correction estimé : {effort}"), ln=True)
+            pdf.ln(2)
+    else:
+        pdf.section_title("Risques principaux")
+        _empty_ok(pdf, "Aucun risque critique ou élevé sur les critères évalués.")
+
+    # Effort global
+    plan = plan_remediation(issues)
+    pdf.section_title("Charge de traitement")
+    pdf.paragraphe(
+        f"{len(plan['immediat'])} action(s) à engager sous 48 heures, "
+        f"{len(plan['court_terme'])} sous un mois et {len(plan['fond'])} à planifier "
+        "sur le trimestre. Le détail figure au chapitre « Plan de remédiation »."
+    )
+
+    if ai_explanation:
+        pdf.section_title("Lecture d'ensemble")
+        pdf.paragraphe(ai_explanation)
+
+
+def _section_methodologie(pdf: CyberGuardianPDF, scan: dict):
+    pdf.chapitre("2.  Méthodologie et périmètre")
+
+    est_github = scan.get("type") == "github"
+    pdf.paragraphe(
+        "L'analyse repose exclusivement sur des informations publiquement accessibles. "
+        "Aucune tentative d'intrusion, d'exploitation de vulnérabilité ou de "
+        "contournement d'authentification n'a été effectuée. Les contrôles sont "
+        "passifs et sans effet sur la disponibilité des services analysés."
+    )
+
+    pdf.section_title("Contrôles effectués")
+    if est_github:
+        controles = [
+            ("Analyse statique du code", "Bandit — recherche de motifs dangereux dans le code Python"),
+            ("Dépendances vulnérables",  "Safety et npm audit — comparaison des versions aux CVE connues"),
+            ("Secrets exposés",          "Recherche par motifs de clés d'API, jetons et mots de passe"),
+        ]
+    else:
+        controles = [
+            ("Authentification email", "SPF, DKIM, DMARC et DNSSEC — enregistrements DNS publics"),
+            ("Chiffrement du trafic",  "Certificat TLS, version du protocole et suite de chiffrement"),
+            ("En-têtes HTTP",          "Six en-têtes de sécurité recommandés par l'OWASP"),
+            ("Ports réseau",           "Connexion TCP simple sur une sélection de ports courants"),
+            ("Vulnérabilités connues", "CVE liées au serveur exposé, croisées CVSS et EPSS"),
+            ("Identité du domaine",    "Registre WHOIS — propriétaire et échéance"),
+        ]
+    for nom, detail in controles:
+        pdf.kv_row(nom, detail)
+
+    # Transparence : ce qui n'a pas été évalué pèse sur la lecture du score
+    non_evalues = (scan.get("results", {}).get("score_detail", {}) or {}).get("not_evaluated", [])
+    pdf.section_title("Limites du périmètre")
+    if non_evalues:
+        points = sum(c.get("max", 0) for c in non_evalues)
+        pdf.paragraphe(
+            f"Les critères suivants n'ont pas été évalués, soit {points} points sur 100. "
+            "Le score est calculé sur les seuls critères réellement mesurés et ne préjuge "
+            "donc pas de la posture sur ces aspects :"
+        )
+        for c in non_evalues:
+            pdf.kv_row(c.get("label", "-"), f"non évalué ({c.get('max', 0)} points)", ORANGE)
+    else:
+        pdf.paragraphe("L'ensemble des critères prévus a été évalué.")
+
+    pdf.ln(1)
+    pdf.paragraphe(
+        "Cette évaluation porte sur la surface exposée à la date du scan. Elle ne "
+        "remplace ni un test d'intrusion, ni un audit de l'infrastructure interne, ni "
+        "une revue applicative approfondie.", taille=9, couleur=GRAY_MID
+    )
+
+
+def _section_synthese(pdf: CyberGuardianPDF, scan: dict):
+    pdf.chapitre("3.  Synthèse des constats")
+
+    issues = scan.get("issues", [])
+    compte = compter_par_severite(issues)
+
+    # En-tête du tableau
+    pdf.set_fill_color(*BLUE_DARK)
+    pdf.set_text_color(*WHITE)
+    pdf.set_font(FONT, "B", 9)
+    pdf.set_x(12)
+    pdf.cell(50, 8, "  Sévérité", fill=True)
+    pdf.cell(28, 8, "Nombre", align="C", fill=True)
+    pdf.cell(108, 8, "  Interprétation", fill=True, ln=True)
+
+    interpretations = {
+        "CRITIQUE": "Exploitable sans compétence particulière — traiter sans délai",
+        "HAUT":     "Risque avéré, exploitation documentée et accessible",
+        "MOYEN":    "Renforcement attendu, exploitation moins directe",
+        "BAS":      "Bonne pratique non appliquée, sans risque immédiat",
+        "INFO":     "Élément de contexte, sans incidence de sécurité",
+    }
+    for sev in ORDRE_SEVERITE:
+        n = compte[sev]
+        pdf.set_x(12)
+        pdf.set_font(FONT, "B", 9)
+        pdf.set_text_color(*_sev_color(sev))
+        pdf.cell(50, 7, f"  {sev.capitalize()}")
+        pdf.set_font(FONT, "B", 9)
+        pdf.set_text_color(*(GRAY_DARK if n else GRAY_LIGHT))
+        pdf.cell(28, 7, str(n), align="C")
+        pdf.set_font(FONT, "", 8.5)
+        pdf.set_text_color(*(GRAY_MID if n else GRAY_LIGHT))
+        pdf.cell(108, 7, f"  {interpretations[sev]}", ln=True)
+        pdf.set_draw_color(*GRAY_LIGHT)
+        pdf.line(12, pdf.get_y(), 198, pdf.get_y())
+
+    pdf.ln(4)
+    breakdown = (scan.get("results", {}).get("score_detail", {}) or {}).get("breakdown", [])
+    if breakdown:
+        pdf.section_title("Score par critère")
+        for b in breakdown:
+            pdf.score_bar(b.get("points", 0), b.get("max", 25), b.get("label", ""))
+
+
+def _section_plan(pdf: CyberGuardianPDF, scan: dict):
+    pdf.chapitre("5.  Plan de remédiation")
+    pdf.paragraphe(
+        "Les actions sont classées par urgence de traitement. Les délais indiqués sont "
+        "des ordres de grandeur pour une configuration standard ; ils supposent l'accès "
+        "à la zone DNS et à la configuration du serveur web."
+    )
+
+    plan = plan_remediation(scan.get("issues", []))
+    vide = True
+    for horizon in ("immediat", "court_terme", "fond"):
+        actions = plan[horizon]
+        if not actions:
+            continue
+        vide = False
+        pdf.section_title(f"{LIBELLES_HORIZON[horizon]}  ({len(actions)})")
+        for n, a in enumerate(actions, 1):
+            pdf.set_font(FONT, "B", 9.5)
+            pdf.set_text_color(*_sev_color(a["severite"]))
+            pdf.set_x(12)
+            pdf.multi_cell(186, 5.5, _clean(f"{n}. {a['titre']}"))
+            if a["action"]:
+                pdf.set_font(FONT, "", 9)
+                pdf.set_text_color(*GRAY_DARK)
+                pdf.set_x(16)
+                pdf.multi_cell(182, 5, _clean(a["action"]))
+            pdf.set_font(FONT, "I", 8.5)
+            pdf.set_text_color(*GRAY_MID)
+            pdf.set_x(16)
+            pdf.cell(0, 5, _clean(f"Effort estimé : {a['effort']}  ·  Sévérité : {a['severite'].capitalize()}"), ln=True)
+            pdf.ln(2)
+
+    if vide:
+        _empty_ok(pdf, "Aucune action corrective requise sur les critères évalués.")
+
+    # Consignes détaillées, propres au type d'analyse
+    r = scan.get("results", {}) or {}
+    if scan.get("type") == "github":
+        recs = _build_github_recommendations(
+            (r.get("bandit") or {}).get("findings", []),
+            (r.get("safety") or {}).get("findings", []),
+            (r.get("trufflehog") or {}).get("findings", []),
+            (r.get("npm_audit") or {}).get("findings", []),
+        )
+    else:
+        recs = _build_easm_recommendations(
+            r.get("ssl", {}), r.get("dns"), r.get("whois"),
+            r.get("headers"), scan.get("issues", []),
+        )
+    if recs:
+        pdf.section_title("Consignes de mise en œuvre")
+        for i, rec in enumerate(recs, 1):
+            pdf.set_font(FONT, "", 9)
+            pdf.set_text_color(*GRAY_DARK)
+            pdf.set_x(12)
+            pdf.multi_cell(186, 5, _clean(f"{i}. {rec}"))
+            pdf.ln(1)
+
+
+def _section_annexes(pdf: CyberGuardianPDF):
+    pdf.chapitre("6.  Annexe — glossaire")
+    pdf.paragraphe(
+        "Définitions des termes techniques employés dans ce rapport, à l'usage des "
+        "lecteurs non spécialistes."
+    )
+    for terme, definition in GLOSSAIRE:
+        pdf.set_font(FONT, "B", 9.5)
+        pdf.set_text_color(*BLUE_DARK)
+        pdf.set_x(12)
+        pdf.cell(28, 6, _clean(terme))
         pdf.set_font(FONT, "", 9)
         pdf.set_text_color(*GRAY_DARK)
-        pdf.set_x(12)
-        pdf.multi_cell(186, 5, _clean(f"{i}. {rec}"))
+        pdf.multi_cell(158, 6, _clean(definition))
         pdf.ln(1)
+
+    pdf.ln(3)
+    pdf.section_title("Sources et référentiels")
+    for source in [
+        "NIST NVD — base publique des vulnérabilités (CVE)",
+        "FIRST.org — scores CVSS et probabilités d'exploitation EPSS",
+        "OWASP Secure Headers Project — en-têtes HTTP recommandés",
+        "RFC 7208 (SPF), RFC 6376 (DKIM), RFC 7489 (DMARC), RFC 4033 (DNSSEC)",
+    ]:
+        pdf.set_font(FONT, "", 9)
+        pdf.set_text_color(*GRAY_MID)
+        pdf.set_x(12)
+        pdf.multi_cell(186, 5.5, _clean(f"·  {source}"))
 
 
 # ── Point d'entree ────────────────────────────────────────────────────────────
@@ -506,48 +890,31 @@ def generate_scan_pdf(scan: dict, ai_explanation: str = "") -> bytes:
 
     pdf = CyberGuardianPDF()
     _register_fonts(pdf)            # police Unicode avant add_page (l'en-tête l'utilise)
-    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_auto_page_break(auto=True, margin=18)
+
+    # Couverture, puis sommaire dont la pagination est résolue en fin de rendu
+    _page_couverture(pdf, scan, score_max)
     pdf.add_page()
+    pdf.insert_toc_placeholder(_rendre_sommaire, pages=1)
 
-    # ── Hero ──────────────────────────────────────────────────────────────────
-    pdf.set_font(FONT, "B", 22)
-    pdf.set_text_color(*sc)
-    pdf.set_x(12)
-    pdf.cell(30, 12, str(score), ln=False)
-    pdf.set_font(FONT, "", 10)
-    pdf.set_text_color(*GRAY_MID)
-    pdf.cell(14, 12, f"/ {score_max}", ln=False)
-    pdf.set_font(FONT, "B", 13)
-    pdf.set_text_color(*GRAY_DARK)
-    pdf.cell(0, 12, _clean(target), ln=True)
+    # Lecture décroissante : d'abord la décision, ensuite la preuve technique
+    _section_resume_executif(pdf, scan, score_max, ai_explanation)
+    _section_methodologie(pdf, scan)
+    _section_synthese(pdf, scan)
 
-    label = "Bon" if score_pct >= 80 else "Niveau moyen" if score_pct >= 50 else "Critique"
-    if is_github:
-        subtitle = f"Analyse GitHub  ·  {label}  ·  Scan du {_clean(scan.get('date', '-'))}"
-    else:
-        grade    = scan.get("results", {}).get("ssl", {}).get("grade", "-")
-        subtitle = f"Grade SSL : {grade}  ·  {label}  ·  Scan du {_clean(scan.get('date', '-'))}"
-
-    pdf.set_font(FONT, "", 9)
-    pdf.set_text_color(*GRAY_MID)
-    pdf.set_x(12)
-    pdf.cell(0, 5, subtitle, ln=True)
-    pdf.ln(4)
-
-    # ── Corps selon le type ───────────────────────────────────────────────────
+    pdf.chapitre("4.  Détail technique des constats")
+    pdf.paragraphe(
+        "Résultat brut de chaque contrôle, avec l'outil qui l'a produit. Cette partie "
+        "s'adresse aux personnes chargées de la mise en œuvre.",
+        taille=9, couleur=GRAY_MID,
+    )
     if is_github:
         _section_github(pdf, scan)
     else:
         _section_ssl(pdf, scan)
 
-    # ── Explication IA ────────────────────────────────────────────────────────
-    if ai_explanation:
-        pdf.section_title("Synthèse")
-        pdf.set_x(12)
-        pdf.set_font(FONT, "", 9.5)
-        pdf.set_text_color(*GRAY_DARK)
-        pdf.multi_cell(186, 6, _clean(ai_explanation))
-        pdf.ln(2)
+    _section_plan(pdf, scan)
+    _section_annexes(pdf)
 
     return bytes(pdf.output())
 
