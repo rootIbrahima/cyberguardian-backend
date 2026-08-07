@@ -1,3 +1,4 @@
+import re
 import json
 from dataclasses import asdict
 
@@ -462,7 +463,7 @@ def ask_ai(
                 headers={"Authorization": f"Bearer {OLLAMA_KEY}"},
                 json={"model": OLLAMA_MODEL, "prompt": context, "stream": True,
                       "think": False,   # qwen3.6 : pas de raisonnement parasite dans le flux
-                      "options": {"num_predict": 280, "temperature": 0.6}},
+                      "options": {"num_predict": 500, "temperature": 0.6}},
                 timeout=httpx.Timeout(connect=15.0, read=180.0, write=15.0, pool=5.0),
             ) as resp:
                 resp.raise_for_status()
@@ -540,6 +541,29 @@ def _ports_summary(results: dict) -> str:
         f"Ports réseau : score={ports.get('score', 0)}/15, "
         f"ouverts : {ouverts}\n"
     )
+
+
+_FIN_DE_PHRASE = re.compile(r"[.!?](?=\s|$)")
+
+
+def _couper_a_la_phrase(texte: str) -> str:
+    """Tronque au dernier point terminant réellement une phrase. Le modèle
+    s'arrête net quand il atteint sa limite de jetons ; une phrase interrompue
+    en plein milieu dans un rapport remis à un client fait plus mauvais effet
+    qu'une phrase en moins."""
+    texte = (texte or "").strip()
+    if not texte or texte[-1] in ".!?":
+        return texte
+
+    # Les points de numérotation (« 1. », « 2. ») ne terminent pas une phrase
+    fins = [m.end() for m in _FIN_DE_PHRASE.finditer(texte)
+            if not (m.start() > 0 and texte[m.start() - 1].isdigit())]
+    if not fins:
+        return texte
+
+    # Ne pas amputer plus du quart du texte : au-delà, la coupure ferait perdre
+    # plus d'information que la phrase incomplète n'en gêne la lecture.
+    return texte[:fins[-1]].strip() if fins[-1] >= len(texte) * 0.75 else texte
 
 
 def _reputation_summary(results: dict) -> str:
@@ -678,10 +702,10 @@ def _generate_simple_explanation(scan: dict) -> str:
             headers={"Authorization": f"Bearer {OLLAMA_KEY}"},
             json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
                   "think": False,   # qwen3.6 : réponse directe sans raisonnement
-                  "options": {"num_predict": 260, "temperature": 0.6}},
+                  "options": {"num_predict": 600, "temperature": 0.6}},
             timeout=60,
         )
         resp.raise_for_status()
-        return resp.json().get("response", "").strip()
+        return _couper_a_la_phrase(resp.json().get("response", ""))
     except Exception:
         return ""

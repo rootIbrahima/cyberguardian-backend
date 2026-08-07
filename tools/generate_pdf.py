@@ -181,6 +181,10 @@ class CyberGuardianPDF(FPDF):
         self.cell(0, 6, _clean(value), ln=True)
 
     def score_bar(self, pts: int, max_pts: int, label: str):
+        # Le libellé, la barre et la valeur forment un tout : sans cette réserve,
+        # le saut de page automatique les dissocie sur deux ou trois pages.
+        if self.espace_restant() < 12:
+            self.add_page()
         bar_x, bar_y = 12, self.get_y()
         bar_w, bar_h = 130, 5
         pct     = int((pts / max_pts) * 100) if max_pts else 0
@@ -845,7 +849,9 @@ def _section_synthese(pdf: CyberGuardianPDF, scan: dict):
     r = scan.get("results", {}) or {}
     breakdown = (r.get("score_detail", {}) or {}).get("breakdown", [])
     if breakdown:
-        pdf.section_title("Score par critère")
+        # Réserve la hauteur de l'ensemble des barres : un tableau de scores
+        # éclaté sur deux pages perd sa lisibilité comparative.
+        pdf.section_title("Score par critère", reserve=20 + 8 * len(breakdown))
         for b in breakdown:
             pdf.score_bar(b.get("points", 0), b.get("max", 25), b.get("label", ""))
 
@@ -968,7 +974,9 @@ def _section_annexes(pdf: CyberGuardianPDF):
         pdf.ln(1)
 
     pdf.ln(3)
-    pdf.section_title("Sources et référentiels")
+    # Bloc court et indissociable : réserver sa hauteur évite qu'une référence
+    # isolée ne parte seule sur une page supplémentaire.
+    pdf.section_title("Sources et référentiels", reserve=48)
     for source in [
         "NIST NVD, base publique des vulnérabilités (CVE)",
         "FIRST.org, scores CVSS et probabilités d'exploitation EPSS",
