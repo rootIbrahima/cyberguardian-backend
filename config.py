@@ -33,6 +33,13 @@ PUBLIC_BASE_URL      = os.getenv("PUBLIC_BASE_URL", "")
 # URL du frontend, pour rediriger le client après l'autorisation
 FRONTEND_URL         = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
+# Réputation (cinquième critère du score) : clés gratuites après inscription.
+#   https://www.virustotal.com/gui/my-apikey
+#   https://www.abuseipdb.com/account/api
+# Sans clé, le critère est exclu du score au lieu d'être compté à zéro.
+VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY", "")
+ABUSEIPDB_API_KEY  = os.getenv("ABUSEIPDB_API_KEY", "")
+
 # Canaux de notification additionnels (Apprise), voir services/notifications.py.
 # Liste d'URLs séparées par des virgules (ex. mailto://user:motdepasse@gmail.com,
 # slack://TokenA/TokenB/TokenC/#canal). Vide par défaut : seul Telegram est utilisé.

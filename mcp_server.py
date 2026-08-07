@@ -10,8 +10,9 @@ Lancement (transport STDIO, depuis le dossier backend/) :
 Test interactif avec MCP Inspector :
     npx @modelcontextprotocol/inspector python mcp_server.py
 
-Outils du cahier des charges restant à ajouter ici au fur et à mesure :
-check_whois, scan_ports, scan_virustotal, scan_abuseipdb, generate_report.
+Les douze outils du cahier des charges y sont exposés : DNS, WHOIS, SSL/TLS,
+en-têtes HTTP, ports réseau, réputation, CVE, EPSS, score global, orchestration
+complète et scan de dépôt GitHub.
 """
 
 from dataclasses import asdict
@@ -25,6 +26,7 @@ from tools.check_cve import check_tls_cves as _check_tls_cves
 from tools.check_cve import check_service_cves as _check_service_cves
 from tools.scan_headers import scan_headers as _scan_headers
 from tools.check_ports import check_ports as _check_ports
+from tools.check_reputation import check_reputation as _check_reputation
 from tools.target_guard import resoudre_et_valider as _valider_cible
 from tools.target_guard import CibleInterdite
 from tools.calculate_score import calculate_score as _calculate_score
@@ -98,21 +100,41 @@ def scan_network_ports(target: str) -> dict:
     return asdict(_check_ports(target))
 
 
+# ── Outils 6 et 7 (CDC) : réputation ──────────────────────────────────────────
+
+@mcp.tool
+def check_target_reputation(target: str) -> dict:
+    """Consulte la réputation d'un domaine ou d'une IP auprès de deux sources
+    indépendantes : VirusTotal, qui agrège plus de 70 moteurs de sécurité, et
+    AbuseIPDB, qui recense les signalements d'abus de la communauté (tentatives
+    d'intrusion, spam, balayage de ports). Révèle un historique de compromission
+    qu'aucune analyse de configuration ne peut détecter. Score sur 15 points.
+    Nécessite les clés VIRUSTOTAL_API_KEY et ABUSEIPDB_API_KEY ; sans elles, le
+    critère est exclu du score plutôt que compté à zéro."""
+    try:
+        _valider_cible(target)
+    except CibleInterdite as e:
+        return {"error": str(e)}
+    return asdict(_check_reputation(target))
+
+
 # ── Outil 10 (CDC) : Score global pondéré ─────────────────────────────────────
 
 @mcp.tool
 def calculate_global_score(dns_score: int | None = None,
                            ssl_score: int | None = None,
                            headers_score: int | None = None,
-                           ports_score: int | None = None) -> dict:
+                           ports_score: int | None = None,
+                           reputation_score: int | None = None) -> dict:
     """Calcule le score de sécurité global /100 pondéré selon la méthodologie
     CyberGuardian : DNS 25 pts, SSL/TLS 25 pts, En-têtes HTTP 20 pts, Ports
-    réseau 15 pts (réputation à venir). Passer les scores obtenus par les outils
-    check_dns_records, check_ssl_certificate, scan_http_headers et
-    scan_network_ports ; les critères non évalués sont exclus et le score est
-    normalisé sur le reste."""
+    réseau 15 pts, Réputation 15 pts. Passer les scores obtenus par les outils
+    check_dns_records, check_ssl_certificate, scan_http_headers,
+    scan_network_ports et check_target_reputation. Les critères non évalués
+    sont exclus et le score est normalisé sur le reste."""
     return _calculate_score({"dns": dns_score, "ssl": ssl_score,
-                             "headers": headers_score, "ports": ports_score})
+                             "headers": headers_score, "ports": ports_score,
+                             "reputation": reputation_score})
 
 
 # ── Outil 3 (CDC) : SSL/TLS ───────────────────────────────────────────────────
@@ -193,12 +215,14 @@ def analyze_security(target: str) -> dict:
     ssl_result = _check_ssl(target)
     headers_result = _scan_headers(target)
     ports_result = _check_ports(target)
+    rep_result = _check_reputation(target)
     tls_cves = _check_tls_cves(ssl_result.tls_version or "", ssl_result.cipher_suite or "")
     banner, svc_cves = _check_service_cves(target)
     cves = _enrich_cves(tls_cves + svc_cves, id_key="id")   # gravité + probabilité EPSS
 
-    issues = list(ssl_result.issues) + list(headers_result.issues) + list(ports_result.issues)
-    parts = {"ssl": ssl_result.score, "headers": headers_result.score, "ports": ports_result.score}
+    issues = list(ssl_result.issues) + list(headers_result.issues) + list(ports_result.issues) + list(rep_result.issues)
+    parts = {"ssl": ssl_result.score, "headers": headers_result.score,
+             "ports": ports_result.score, "reputation": rep_result.score}
     dns_dict = None
     whois_dict = None
 
@@ -224,6 +248,7 @@ def analyze_security(target: str) -> dict:
         "ssl":           asdict(ssl_result),
         "headers":       asdict(headers_result),
         "ports":         asdict(ports_result),
+        "reputation":    asdict(rep_result),
         "cves":          cves,
         "server_banner": banner,
         "score":         score_detail["score"],

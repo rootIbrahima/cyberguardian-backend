@@ -335,6 +335,27 @@ def _section_ssl(pdf: CyberGuardianPDF, scan: dict):
     if sans:
         pdf.kv_row("SAN (domaines)", _clean(", ".join(sans[:5]) + ("..." if len(sans) > 5 else "")))
 
+    # Réputation : historique de la cible auprès des listes publiques
+    reputation = results.get("reputation")
+    if reputation and reputation.get("score") is not None:
+        pdf.section_title(f"Réputation  ({', '.join(reputation.get('sources', []))})")
+        if reputation.get("vt_disponible"):
+            malveillant = reputation.get("vt_malveillant", 0)
+            pdf.kv_row("Moteurs signalant un risque",
+                       f"{malveillant} sur {reputation.get('vt_total_moteurs', 0)}",
+                       RED if malveillant else GREEN)
+            if reputation.get("vt_suspect"):
+                pdf.kv_row("Moteurs jugeant suspect", str(reputation["vt_suspect"]), ORANGE)
+        if reputation.get("abuse_disponible"):
+            indice = reputation.get("abuse_score", 0)
+            pdf.kv_row("Indice de signalement d'abus", f"{indice} sur 100",
+                       RED if indice >= 50 else ORANGE if indice else GREEN)
+            pdf.kv_row("Signalements sur 90 jours", str(reputation.get("abuse_signalements", 0)))
+            if reputation.get("abuse_fournisseur"):
+                pdf.kv_row("Hébergeur", reputation["abuse_fournisseur"])
+            if reputation.get("abuse_pays"):
+                pdf.kv_row("Pays de l'adresse", reputation["abuse_pays"])
+
     # En-têtes de sécurité HTTP
     if headers:
         present = headers.get("headers_present", {})
@@ -752,6 +773,7 @@ def _section_methodologie(pdf: CyberGuardianPDF, scan: dict):
             ("En-têtes HTTP",          "Six en-têtes de sécurité recommandés par l'OWASP"),
             ("Ports réseau",           "Connexion TCP simple sur une sélection de ports courants"),
             ("Vulnérabilités connues", "CVE liées au serveur exposé, croisées CVSS et EPSS"),
+            ("Réputation",             "VirusTotal et AbuseIPDB, listes noires et signalements"),
             ("Identité du domaine",    "Registre WHOIS : propriétaire et échéance"),
         ]
     for nom, detail in controles:

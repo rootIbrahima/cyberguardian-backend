@@ -111,6 +111,51 @@ def test_empreinte_vide_refusee():
 
 # ── Authenticité du webhook Telegram ──────────────────────────────────────────
 
+# ── Réputation : le critère ne doit jamais pénaliser à tort ───────────────────
+
+def test_reputation_sans_cle_est_exclue_du_score(monkeypatch):
+    """Sans clé configurée, le critère vaut None (exclu du calcul) et non zéro :
+    une mesure absente n'est pas un risque avéré."""
+    from tools import check_reputation as mod
+
+    monkeypatch.setattr(mod, "VIRUSTOTAL_API_KEY", "")
+    monkeypatch.setattr(mod, "ABUSEIPDB_API_KEY", "")
+    r = mod.check_reputation("example.com")
+    assert r.score is None
+    assert r.error and "clé" in r.error.lower()
+
+
+def test_reputation_penalise_les_signalements():
+    """Le barème doit distinguer une cible saine d'une cible signalée."""
+    from tools.check_reputation import ReputationResult, _calculate_score
+
+    saine = ReputationResult(target="x", vt_disponible=True, vt_total_moteurs=70,
+                             abuse_disponible=True, abuse_score=0)
+    assert _calculate_score(saine) == 15
+
+    signalee = ReputationResult(target="x", vt_disponible=True, vt_malveillant=4,
+                                vt_total_moteurs=70, abuse_disponible=True,
+                                abuse_score=90)
+    assert _calculate_score(signalee) == 0
+
+    moderee = ReputationResult(target="x", vt_disponible=True, vt_malveillant=1,
+                               vt_total_moteurs=70, abuse_disponible=True,
+                               abuse_score=30)
+    assert 0 < _calculate_score(moderee) < 15
+
+
+def test_score_global_couvre_cent_points():
+    """Les cinq critères réunis totalisent bien 100 points."""
+    from tools.calculate_score import WEIGHTS
+
+    assert sum(WEIGHTS.values()) == 100
+    detail = __import__("tools.calculate_score", fromlist=["calculate_score"]).calculate_score(
+        {"dns": 25, "ssl": 25, "headers": 20, "ports": 15, "reputation": 15}
+    )
+    assert detail["score"] == 100
+    assert detail["not_evaluated"] == []
+
+
 @pytest.fixture
 def client_webhook():
     """Application minimale exposant uniquement le routeur Telegram, pour tester

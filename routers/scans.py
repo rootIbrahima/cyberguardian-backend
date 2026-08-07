@@ -18,6 +18,7 @@ from tools.check_ssl import check_ssl
 from tools.check_cve import check_tls_cves, check_service_cves
 from tools.scan_headers import scan_headers
 from tools.check_ports import check_ports
+from tools.check_reputation import check_reputation
 from tools.target_guard import resoudre_et_valider, CibleInterdite
 from tools.calculate_score import calculate_score
 from tools.generate_pdf import generate_scan_pdf
@@ -150,7 +151,12 @@ def launch_scan(
         results["ports"] = asdict(ports)
         issues = issues + ports.issues
 
-        score_parts = {"ssl": ssl.score, "headers": headers.score, "ports": ports.score}
+        reputation = check_reputation(body.target)
+        results["reputation"] = asdict(reputation)
+        issues = issues + reputation.issues
+
+        score_parts = {"ssl": ssl.score, "headers": headers.score,
+                       "ports": ports.score, "reputation": reputation.score}
 
         # DNS et WHOIS n'ont de sens que pour un domaine, pas une IP brute
         if body.asset_type in ("domain", "url"):
@@ -402,6 +408,7 @@ def ask_ai(
         whois_line = _whois_summary(results)
         headers_line = _headers_summary(results)
         ports_line = _ports_summary(results)
+        reputation_line = _reputation_summary(results)
         cve_critical = [c for c in cves if c.get("severity", "").upper() in ("CRITICAL", "CRITIQUE")]
         cve_high     = [c for c in cves if c.get("severity", "").upper() in ("HIGH", "HAUT")]
         cve_details  = "\n".join(
@@ -426,6 +433,7 @@ def ask_ai(
             f"{whois_line}"
             f"{headers_line}"
             f"{ports_line}"
+            f"{reputation_line}"
             f"CVE détectées ({len(cves)}) dont {len(cve_critical)} CRITIQUE et {len(cve_high)} HAUT :\n"
             f"{cve_details}\n"
             f"Problèmes détectés ({len(issues)}) : {problems}\n\n"
@@ -526,6 +534,20 @@ def _ports_summary(results: dict) -> str:
         f"Ports réseau : score={ports.get('score', 0)}/15, "
         f"ouverts : {ouverts}\n"
     )
+
+
+def _reputation_summary(results: dict) -> str:
+    rep = results.get("reputation")
+    if not rep or rep.get("score") is None:
+        return ""
+    details = []
+    if rep.get("vt_disponible"):
+        details.append(f"VirusTotal : {rep.get('vt_malveillant', 0)} moteur(s) malveillant "
+                       f"sur {rep.get('vt_total_moteurs', 0)}")
+    if rep.get("abuse_disponible"):
+        details.append(f"AbuseIPDB : indice {rep.get('abuse_score', 0)}/100 "
+                       f"({rep.get('abuse_signalements', 0)} signalements)")
+    return f"Réputation : score={rep.get('score')}/15, " + ", ".join(details) + "\n"
 
 
 def _expert_share_active(scan: Scan, user: User, db: Session) -> bool:
@@ -630,6 +652,7 @@ def _generate_simple_explanation(scan: dict) -> str:
             f"{_whois_summary(results)}"
             f"{_headers_summary(results)}"
             f"{_ports_summary(results)}"
+            f"{_reputation_summary(results)}"
             f"CVE détectées ({len(cves)}) dont {len(cve_critical)} CRITIQUE et {len(cve_high)} HAUT :\n{cve_str}\n"
             f"Problèmes détectés :\n{issues_str}\n\n"
             "RÈGLES :\n"
