@@ -807,7 +807,10 @@ def _section_methodologie(pdf: CyberGuardianPDF, scan: dict):
 
 
 def _section_synthese(pdf: CyberGuardianPDF, scan: dict):
-    pdf.chapitre("3.  Synthèse des constats")
+    # Ce chapitre tient en deux blocs indissociables, le tableau des sévérités
+    # et celui des scores. Démarrer sans la place pour les deux revient à
+    # renvoyer le second seul sur la page suivante.
+    pdf.chapitre("3.  Synthèse des constats", reserve=145)
 
     issues = scan.get("issues", [])
     compte = compter_par_severite(issues)
