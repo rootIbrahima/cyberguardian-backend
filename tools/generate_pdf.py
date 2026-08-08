@@ -14,32 +14,71 @@ from tools.rapport_contenu import (
     plan_remediation,
 )
 
-# Police Unicode du document (accents français rendus correctement).
-# Segoe UI est présente sur Windows ; repli sur Helvetica si introuvable.
-FONT = "CG"
-_FONT_DIR = r"C:\Windows\Fonts"
-_FONT_FILES = {
-    "":  os.path.join(_FONT_DIR, "segoeui.ttf"),
-    "B": os.path.join(_FONT_DIR, "segoeuib.ttf"),
-    "I": os.path.join(_FONT_DIR, "segoeuii.ttf"),
+# Police Unicode du document, pour que les accents français soient rendus.
+# Les jeux sont essayés dans l'ordre : Segoe UI sur Windows, DejaVu sur les
+# distributions Linux (paquet fonts-dejavu-core, présent par défaut sur Ubuntu).
+_JEUX_POLICES = [
+    {
+        "":  r"C:\Windows\Fonts\segoeui.ttf",
+        "B": r"C:\Windows\Fonts\segoeuib.ttf",
+        "I": r"C:\Windows\Fonts\segoeuii.ttf",
+    },
+    {
+        "":  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "B": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "I": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
+    },
+]
+
+
+def _choisir_jeu_polices() -> dict | None:
+    for jeu in _JEUX_POLICES:
+        if all(os.path.exists(chemin) for chemin in jeu.values()):
+            return jeu
+    return None
+
+
+# Choix arrêté à l'import : la famille utilisée dans tout le document doit être
+# connue avant le premier tracé. Sans police Unicode disponible on retombe sur
+# Helvetica, intégrée à fpdf, qui couvre le latin-1 donc les accents français.
+_JEU_POLICES = _choisir_jeu_polices()
+FONT = "CG" if _JEU_POLICES else "Helvetica"
+
+
+def _register_fonts(pdf: "FPDF") -> None:
+    """Déclare la police Unicode auprès du document, si un jeu est disponible.
+    Avec Helvetica il n'y a rien à enregistrer, fpdf l'intègre."""
+    if not _JEU_POLICES:
+        return
+    for style, chemin in _JEU_POLICES.items():
+        pdf.add_font(FONT, style, chemin)
+
+
+# Transpositions appliquées uniquement en repli Helvetica, dont le jeu latin-1
+# ne couvre ni la ligature « œ » ni les signes typographiques. Sans elles, la
+# génération échoue sur un simple « mise en œuvre ».
+_HORS_LATIN1 = {
+    "œ": "oe", "Œ": "OE", "æ": "ae", "Æ": "AE",
+    "…": "...", "—": "-", "–": "-", "‑": "-",
+    "’": "'", "‘": "'", "“": '"', "”": '"',
+    "≥": ">=", "≤": "<=", "×": "x", "·": "-",
 }
-
-
-def _register_fonts(pdf: "FPDF") -> str:
-    """Enregistre la police Unicode ; retourne le nom de famille utilisable."""
-    if all(os.path.exists(p) for p in _FONT_FILES.values()):
-        for style, path in _FONT_FILES.items():
-            pdf.add_font(FONT, style, path)
-        return FONT
-    return "Helvetica"   # repli : accents non garantis, mais pas de plantage
 
 
 def _clean(text: str) -> str:
     """Nettoie le texte tout en conservant les accents (police Unicode).
-    Retire seulement le balisage Markdown que le LLM peut produire."""
+    Retire le balisage Markdown que le LLM peut produire, et n'applique la
+    transposition latin-1 que si aucune police Unicode n'est disponible."""
     if not text:
         return ""
-    return str(text).replace("**", "").replace("*", "")
+    texte = str(text).replace("**", "").replace("*", "")
+    if FONT == "Helvetica":
+        for origine, remplacement in _HORS_LATIN1.items():
+            texte = texte.replace(origine, remplacement)
+        # Filet de sécurité : tout caractère restant hors latin-1 ferait échouer
+        # la génération, mieux vaut un point d'interrogation qu'un rapport absent
+        texte = texte.encode("latin-1", "replace").decode("latin-1")
+    return texte
 
 
 # Palette : alignée sur le design system du frontend (BLUE_MED = --cg-primary).
