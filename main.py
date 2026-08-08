@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from config import FRONTEND_URL
 from database import engine
 from models import Base
 from routers import scans, experts, messages, admin, notifications
@@ -12,9 +13,17 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="CyberGuardian API", version="1.0.0")
 
+# Origines autorisées : les deux ports de développement, plus FRONTEND_URL pour
+# la production. Servi par le même nginx que l'API, le frontend partage son
+# origine et n'a alors pas besoin de CORS ; l'entrée reste utile si les deux
+# sont un jour séparés sur des domaines distincts.
+origines = ["http://localhost:3000", "http://localhost:5173"]
+if FRONTEND_URL and FRONTEND_URL not in origines:
+    origines.append(FRONTEND_URL)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=origines,
     allow_methods=["*"],
     allow_headers=["*"],
 )
