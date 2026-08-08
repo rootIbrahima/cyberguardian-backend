@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import FRONTEND_URL
 from database import engine
 from models import Base
-from routers import scans, experts, messages, admin, notifications
+from routers import scans, experts, messages, admin, notifications, statistiques
 from routers import telegram_liaison, telegram_webhook, github_oauth
 from routers import auth as auth_router
 from services.prechauffage import prechauffer_modele
@@ -34,6 +34,7 @@ app.include_router(experts.router)
 app.include_router(messages.router)
 app.include_router(admin.router)
 app.include_router(notifications.router)
+app.include_router(statistiques.router)
 app.include_router(telegram_liaison.router)
 app.include_router(telegram_webhook.router)
 app.include_router(github_oauth.router)
