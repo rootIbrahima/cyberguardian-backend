@@ -16,7 +16,12 @@ import nmap
 
 from tools.target_guard import extraire_hote
 
-_TIMEOUT_SEC = 8
+# Délai maximal accordé à nmap pour l'ensemble des ports d'un hôte. Une valeur
+# trop courte est pire qu'inutile : nmap abandonne en cours de route et rapporte
+# des états partiels, ce qui produit des ports « ouverts » différents à chaque
+# exécution. Observé avec 8 s sur une cible lointaine, où Telnet, RDP et MySQL
+# étaient annoncés ouverts alors qu'aucun ne répondait.
+_TIMEOUT_SEC = 60
 
 # port -> (service, sévérité si ouvert, recommandation)
 PORT_CATALOG: dict[int, tuple[str, str, str]] = {
@@ -90,7 +95,7 @@ def check_ports(target: str) -> PortsResult:
         nm.scan(
             hosts=host,
             arguments=(
-                f"-sT -Pn -T4 --host-timeout {_TIMEOUT_SEC}s "
+                f"-sT -Pn -T3 --max-retries 2 --host-timeout {_TIMEOUT_SEC}s "
                 f"-p {','.join(str(p) for p in ports)}"
             ),
         )
