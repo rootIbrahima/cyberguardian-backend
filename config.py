@@ -13,6 +13,23 @@ OLLAMA_URL   = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_KEY   = os.getenv("OLLAMA_KEY", "")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3:latest")
 
+# Durée pendant laquelle Ollama garde le modèle chargé en mémoire GPU après une
+# requête. Par défaut il le décharge au bout de 5 minutes, si bien que le
+# premier client de la journée attend le rechargement complet (≈ 15 s pour un
+# modèle de 14 Go). « -1 » le maintient en permanence : la mémoire est occupée
+# en continu, mais aucune requête ne paie le démarrage.
+# Ollama attend soit un entier de secondes (-1 pour « indéfiniment »), soit une
+# durée avec unité (« 30m », « 24h »). Une chaîne « -1 » est refusée : le
+# serveur répond « missing unit in duration ». La valeur est donc convertie.
+_keep_alive = os.getenv("OLLAMA_KEEP_ALIVE", "-1").strip()
+try:
+    OLLAMA_KEEP_ALIVE = int(_keep_alive)
+except ValueError:
+    OLLAMA_KEEP_ALIVE = _keep_alive
+
+# Plafond de scans par cible et par 24 h (CDC §7.1). 0 désactive la limite.
+QUOTA_SCANS_PAR_CIBLE = int(os.getenv("QUOTA_SCANS_PAR_CIBLE", "0"))
+
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "cg-dev-only-secret")
 
 # Chiffrement au repos des secrets stockés en base (jeton OAuth GitHub).

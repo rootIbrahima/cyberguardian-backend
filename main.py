@@ -5,6 +5,7 @@ from models import Base
 from routers import scans, experts, messages, admin, notifications
 from routers import telegram_liaison, telegram_webhook, github_oauth
 from routers import auth as auth_router
+from services.prechauffage import prechauffer_modele
 
 # Crée toutes les tables au démarrage
 Base.metadata.create_all(bind=engine)
@@ -27,6 +28,13 @@ app.include_router(notifications.router)
 app.include_router(telegram_liaison.router)
 app.include_router(telegram_webhook.router)
 app.include_router(github_oauth.router)
+
+
+@app.on_event("startup")
+def demarrage():
+    # Charge le modèle en mémoire GPU sans bloquer le démarrage : le premier
+    # client n'attend pas les quinze secondes de chargement.
+    prechauffer_modele()
 
 
 @app.get("/")

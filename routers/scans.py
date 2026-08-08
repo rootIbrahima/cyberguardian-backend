@@ -25,7 +25,8 @@ from tools.calculate_score import calculate_score
 from tools.generate_pdf import generate_scan_pdf
 from tools.github_tools import scan_github
 
-from config import OLLAMA_URL, OLLAMA_KEY, OLLAMA_MODEL
+from config import (OLLAMA_URL, OLLAMA_KEY, OLLAMA_MODEL, OLLAMA_KEEP_ALIVE,
+                    QUOTA_SCANS_PAR_CIBLE)
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -34,7 +35,8 @@ MOIS = ["jan", "fev", "mar", "avr", "mai", "jun",
 
 # CDC §7.1 : limite le rythme des scans pour qu'un compte ne puisse pas
 # transformer la plateforme en relais de reconnaissance à haute fréquence.
-QUOTA_PAR_CIBLE_24H = 3
+# Réglable par QUOTA_SCANS_PAR_CIBLE dans .env, 0 désactivant la limite.
+QUOTA_PAR_CIBLE_24H = QUOTA_SCANS_PAR_CIBLE
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -51,6 +53,8 @@ def _depuis_24h() -> str:
 def _verifier_quota(db: Session, user_id: int, target: str) -> None:
     """Refuse au-delà de QUOTA_PAR_CIBLE_24H scans d'une même cible sur 24h.
     Les scans antérieurs à l'ajout du champ created_at ne sont pas décomptés."""
+    if QUOTA_PAR_CIBLE_24H <= 0:      # limite désactivée par configuration
+        return
     recents = (
         db.query(Scan)
         .filter(
@@ -271,7 +275,8 @@ def get_quota(
     db:           Session = Depends(get_db),
     current_user: User    = Depends(get_current_user),
 ):
-    """Consommation des dernières 24h et plafond appliqué par cible (CDC §7.1)."""
+    """Consommation des dernières 24h et plafond appliqué par cible (CDC §7.1).
+    limit vaut null quand la limitation est désactivée."""
     used = (
         db.query(Scan)
         .filter(
@@ -281,7 +286,12 @@ def get_quota(
         )
         .count()
     )
-    return {"used": used, "limit": QUOTA_PAR_CIBLE_24H, "window": "24h", "scope": "cible"}
+    return {
+        "used":   used,
+        "limit":  QUOTA_PAR_CIBLE_24H if QUOTA_PAR_CIBLE_24H > 0 else None,
+        "window": "24h",
+        "scope":  "cible",
+    }
 
 
 @router.get("/{scan_id}/status")
@@ -461,7 +471,7 @@ def ask_ai(
                 "POST",
                 f"{OLLAMA_URL}/api/generate",
                 headers={"Authorization": f"Bearer {OLLAMA_KEY}"},
-                json={"model": OLLAMA_MODEL, "prompt": context, "stream": True,
+                json={"model": OLLAMA_MODEL, "prompt": context, "stream": True, "keep_alive": OLLAMA_KEEP_ALIVE,
                       "think": False,   # qwen3.6 : pas de raisonnement parasite dans le flux
                       "options": {"num_predict": 500, "temperature": 0.6}},
                 timeout=httpx.Timeout(connect=15.0, read=180.0, write=15.0, pool=5.0),
@@ -700,7 +710,7 @@ def _generate_simple_explanation(scan: dict) -> str:
         resp = httpx.post(
             f"{OLLAMA_URL}/api/generate",
             headers={"Authorization": f"Bearer {OLLAMA_KEY}"},
-            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
+            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "keep_alive": OLLAMA_KEEP_ALIVE,
                   "think": False,   # qwen3.6 : réponse directe sans raisonnement
                   "options": {"num_predict": 600, "temperature": 0.6}},
             timeout=60,

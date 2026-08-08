@@ -28,7 +28,8 @@ from sqlalchemy.orm import Session
 
 from database import get_db, SessionLocal
 from models import Scan, TelegramMessage
-from config import OLLAMA_URL, OLLAMA_KEY, OLLAMA_MODEL, TELEGRAM_WEBHOOK_SECRET
+from config import (OLLAMA_URL, OLLAMA_KEY, OLLAMA_MODEL, OLLAMA_KEEP_ALIVE,
+                    TELEGRAM_WEBHOOK_SECRET)
 from services.telegram_liaison import (
     verifier_code_et_lier,
     get_user_par_chat_id,
@@ -324,7 +325,7 @@ def _repondre_ia(chat_id: str, user_id: int, question: str):
             resp = httpx.post(
                 f"{OLLAMA_URL}/api/generate",
                 headers={"Authorization": f"Bearer {OLLAMA_KEY}"},
-                json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False,
+                json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "keep_alive": OLLAMA_KEEP_ALIVE,
                       "think": False,
                       "options": {"num_predict": 500, "temperature": 0.6}},
                 timeout=httpx.Timeout(connect=15.0, read=180.0, write=15.0, pool=5.0),
