@@ -7,8 +7,8 @@ ports courants pour rester rapide et proportionné à un contrôle EASM passif.
 Pèse 15 pts dans le score global (exposition de services internes).
 """
 
-import platform
-import sys
+import socket
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -22,6 +22,11 @@ from tools.target_guard import extraire_hote
 # exécution. Observé avec 8 s sur une cible lointaine, où Telnet, RDP et MySQL
 # étaient annoncés ouverts alors qu'aucun ne répondait.
 _TIMEOUT_SEC = 60
+
+# Délai d'une connexion de confirmation. Court volontairement : un service qui
+# accepte les connexions répond en quelques centaines de millisecondes, tandis
+# qu'un port faussement signalé ouvert laisse la connexion expirer.
+_CONFIRMATION_SEC = 5
 
 # port -> (service, sévérité si ouvert, recommandation)
 PORT_CATALOG: dict[int, tuple[str, str, str]] = {
@@ -77,6 +82,33 @@ def _scanner() -> nmap.PortScanner:
     return nmap.PortScanner(nmap_search_path=search_path)
 
 
+def _confirmer_ouverture(hote: str, ports: list[int]) -> list[int]:
+    """Ne conserve que les ports acceptant réellement une connexion TCP.
+
+    Nmap conclut à l'ouverture dès qu'une sonde reçoit une réponse ; les
+    dispositifs anti-scan en renvoient sur des ports pourtant fermés. Une
+    connexion complète, établie puis refermée immédiatement, tranche sans
+    ambiguïté et reste aussi peu intrusive que le scan lui-même.
+
+    Les vérifications sont menées de front : séquentielles, elles ajouteraient
+    plusieurs secondes par port au temps total du scan.
+    """
+    if not ports:
+        return []
+
+    def joignable(port: int) -> int | None:
+        with socket.socket() as s:
+            s.settimeout(_CONFIRMATION_SEC)
+            try:
+                return port if s.connect_ex((hote, port)) == 0 else None
+            except OSError:
+                return None
+
+    with ThreadPoolExecutor(max_workers=min(10, len(ports))) as executor:
+        confirmes = [p for p in executor.map(joignable, ports) if p is not None]
+    return sorted(confirmes)
+
+
 def check_ports(target: str) -> PortsResult:
     host = extraire_hote(target)
     result = PortsResult(target=host)
@@ -122,11 +154,17 @@ def check_ports(target: str) -> PortsResult:
 
     result.reachable = True
     tcp = nm[hosts_found[0]].get("tcp", {})
-    for port in ports:
-        state = tcp.get(port, {}).get("state")
-        if state == "open":
-            service, severity, _ = PORT_CATALOG[port]
-            result.open_ports.append({"port": port, "service": service, "severity": severity})
+    candidats = [p for p in ports if tcp.get(p, {}).get("state") == "open"]
+
+    # Nmap seul ne suffit pas : certaines protections anti-scan répondent aux
+    # sondes sur des ports pourtant filtrés, ce qui les fait passer pour
+    # ouverts. Observé sur un hébergement OVH, où deux exécutions successives
+    # donnaient des listes différentes incluant Telnet, RDP et MySQL, alors
+    # qu'aucun de ces services n'acceptait la moindre connexion. Chaque
+    # candidat est donc confirmé par une connexion TCP réellement établie.
+    for port in _confirmer_ouverture(hosts_found[0], candidats):
+        service, severity, _ = PORT_CATALOG[port]
+        result.open_ports.append({"port": port, "service": service, "severity": severity})
 
     result.issues = _detect_issues(result)
     result.score = _calculate_score(result)
