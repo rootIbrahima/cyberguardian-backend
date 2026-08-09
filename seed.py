@@ -1,20 +1,32 @@
 """
 Initialise la base de données avec les comptes par défaut
 et l'annuaire d'experts validés.
-Usage : python seed.py
+
+Usage :
+    python seed.py                        crée les comptes manquants
+    python seed.py --maj-mots-de-passe    réapplique aussi les mots de passe
+                                          aux comptes déjà existants
+
+Les mots de passe viennent de .env (SEED_*_PASSWORD) et jamais de ce fichier :
+le dépôt est public, une valeur écrite ici serait lisible par tout le monde.
+Sans valeur dans .env, un mot de passe aléatoire est tiré et affiché une fois.
 """
+import secrets
+import sys
 from datetime import datetime, timezone
+
+from config import SEED_ADMIN_PASSWORD, SEED_CLIENT_PASSWORD, SEED_EXPERT_PASSWORD
 from database import engine, SessionLocal
 from models import Base, User, ExpertProfile
 from auth import hash_password
 
 USERS = [
-    {"email": "admin@cyberguardian.sn",  "name": "Admin CyberGuardian", "password": "Admin2026!", "role": "admin"},
-    {"email": "expert@cyberguardian.sn", "name": "Mamadou Diallo",      "password": "Expert2026!", "role": "expert"},
-    {"email": "ibrahima.ly@ec2lt.sn",    "name": "Ibrahima LY",         "password": "Client2026!", "role": "client"},
-    {"email": "fatou.sow@cyberguardian.sn",      "name": "Fatou Sow",       "password": "Expert2026!", "role": "expert"},
-    {"email": "ousmane.ba@cyberguardian.sn",     "name": "Ousmane Ba",      "password": "Expert2026!", "role": "expert"},
-    {"email": "aissatou.ndiaye@cyberguardian.sn", "name": "Aissatou Ndiaye", "password": "Expert2026!", "role": "expert"},
+    {"email": "admin@cyberguardian.sn",  "name": "Admin CyberGuardian", "role": "admin"},
+    {"email": "expert@cyberguardian.sn", "name": "Mamadou Diallo",      "role": "expert"},
+    {"email": "ibrahima.ly@ec2lt.sn",    "name": "Ibrahima LY",         "role": "client"},
+    {"email": "fatou.sow@cyberguardian.sn",      "name": "Fatou Sow",       "role": "expert"},
+    {"email": "ousmane.ba@cyberguardian.sn",     "name": "Ousmane Ba",      "role": "expert"},
+    {"email": "aissatou.ndiaye@cyberguardian.sn", "name": "Aissatou Ndiaye", "role": "expert"},
 ]
 
 # Profils des experts validés (annuaire de démonstration)
@@ -26,24 +38,50 @@ EXPERT_PROFILES = {
 }
 
 
-def seed():
+def _mots_de_passe() -> tuple[dict[str, str], set[str]]:
+    """Mot de passe à appliquer par rôle, et rôles dont la valeur a été tirée
+    au sort faute d'entrée dans .env. Un tirage aléatoire vaut mieux qu'une
+    valeur par défaut : celle-ci finirait dans le dépôt et serait donc connue."""
+    configures = {
+        "admin":  SEED_ADMIN_PASSWORD,
+        "expert": SEED_EXPERT_PASSWORD,
+        "client": SEED_CLIENT_PASSWORD,
+    }
+    tires = {role for role, valeur in configures.items() if not valeur}
+    return (
+        {role: valeur or secrets.token_urlsafe(12) for role, valeur in configures.items()},
+        tires,
+    )
+
+
+def seed(maj_mots_de_passe: bool = False):
     Base.metadata.create_all(bind=engine)
+    par_role, tires = _mots_de_passe()
     db = SessionLocal()
-    created = 0
+    crees = 0
+    mis_a_jour = 0
     try:
         for u in USERS:
-            exists = db.query(User).filter(User.email == u["email"]).first()
-            if not exists:
-                user = User(
+            mot_de_passe = par_role[u["role"]]
+            # Un mot de passe tiré au sort n'est affiché qu'une fois : sans cela
+            # il serait perdu. Ceux de .env ne sont jamais réécrits en console.
+            trace = f", mot de passe : {mot_de_passe}" if u["role"] in tires else ""
+
+            existant = db.query(User).filter(User.email == u["email"]).first()
+            if not existant:
+                db.add(User(
                     email         = u["email"],
                     name          = u["name"],
-                    password_hash = hash_password(u["password"]),
+                    password_hash = hash_password(mot_de_passe),
                     role          = u["role"],
                     created_at    = datetime.now(timezone.utc).isoformat(),
-                )
-                db.add(user)
-                created += 1
-                print(f"  [+] {u['role']:8s} {u['email']}, mot de passe : {u['password']}")
+                ))
+                crees += 1
+                print(f"  [+] {u['role']:8s} {u['email']}{trace}")
+            elif maj_mots_de_passe:
+                existant.password_hash = hash_password(mot_de_passe)
+                mis_a_jour += 1
+                print(f"  [~] {u['role']:8s} {u['email']}, mot de passe réappliqué{trace}")
             else:
                 print(f"  [=] {u['role']:8s} {u['email']}, déjà existant")
         db.commit()
@@ -62,10 +100,18 @@ def seed():
                 ))
                 print(f"  [+] profil expert validé : {user.name} ({p['specialty']})")
         db.commit()
-        print(f"\n{created} compte(s) créé(s). Base prête.")
+
+        print(f"\n{crees} compte(s) créé(s), {mis_a_jour} mot(s) de passe réappliqué(s). Base prête.")
+        if tires:
+            roles = ", ".join(sorted(tires))
+            print(f"\n  Mot de passe tiré au sort pour : {roles}.")
+            print("  Notez-le maintenant, il n'est pas conservé. Pour en fixer un,")
+            print("  renseignez SEED_ADMIN_PASSWORD / SEED_EXPERT_PASSWORD /")
+            print("  SEED_CLIENT_PASSWORD dans backend/.env.")
     finally:
         db.close()
 
+
 if __name__ == "__main__":
     print("=== Seed CyberGuardian ===\n")
-    seed()
+    seed(maj_mots_de_passe="--maj-mots-de-passe" in sys.argv)

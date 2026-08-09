@@ -99,8 +99,8 @@ def test_ancien_hachage_sha256_toujours_accepte():
     et être signalés comme à re-hacher."""
     from passlib.hash import sha256_crypt
 
-    ancien = sha256_crypt.hash("Client2026!")
-    assert verify_password("Client2026!", ancien)
+    ancien = sha256_crypt.hash("motDePasseDEssai!42")
+    assert verify_password("motDePasseDEssai!42", ancien)
     assert not verify_password("autre", ancien)
     assert besoin_rehachage(ancien)
 

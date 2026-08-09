@@ -32,6 +32,13 @@ QUOTA_SCANS_PAR_CIBLE = int(os.getenv("QUOTA_SCANS_PAR_CIBLE", "0"))
 
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "cg-dev-only-secret")
 
+# Comptes de démonstration créés par seed.py. Aucune valeur par défaut ici :
+# le dépôt est public, un mot de passe écrit dans le code serait lisible par
+# n'importe qui. Vide, seed.py en tire un au sort et l'affiche une fois.
+SEED_ADMIN_PASSWORD  = os.getenv("SEED_ADMIN_PASSWORD", "")
+SEED_EXPERT_PASSWORD = os.getenv("SEED_EXPERT_PASSWORD", "")
+SEED_CLIENT_PASSWORD = os.getenv("SEED_CLIENT_PASSWORD", "")
+
 # Chiffrement au repos des secrets stockés en base (jeton OAuth GitHub).
 # Générer avec : python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
