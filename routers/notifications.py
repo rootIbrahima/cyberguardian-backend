@@ -9,6 +9,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from horodatage import maintenant_iso
 from database import get_db
 from models import Notification, User
 from auth import get_current_user
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 
 def _now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return maintenant_iso()
 
 
 def creer_notification(db: Session, user_id: int, type: str, title: str,

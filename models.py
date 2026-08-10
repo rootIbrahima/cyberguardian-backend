@@ -119,6 +119,7 @@ class Conversation(Base):
     level            = Column(Integer, default=1)        # 1 demande | 2 mission | 3 contrat
     mission_start    = Column(String, nullable=True)     # ISO, début de l'accès 48h (niveau 3)
     rating           = Column(Integer, nullable=True)    # note du client (1-5) après mission
+    scan_id          = Column(Integer, ForeignKey("scans.id"), nullable=True)
     client_last_read = Column(String, nullable=True)     # ISO, pour le compteur non-lus
     expert_last_read = Column(String, nullable=True)
     created_at       = Column(String)
@@ -127,6 +128,7 @@ class Conversation(Base):
     expert   = relationship("User", foreign_keys=[expert_id])
     messages = relationship("Message", back_populates="conversation",
                             order_by="Message.id", cascade="all, delete-orphan")
+    scan     = relationship("Scan", foreign_keys=[scan_id])
 
 
 class Message(Base):
@@ -139,6 +141,26 @@ class Message(Base):
     created_at      = Column(String)                     # ISO
 
     conversation = relationship("Conversation", back_populates="messages")
+    piece_jointe = relationship("MessageAttachment", back_populates="message",
+                                uselist=False, cascade="all, delete-orphan")
+
+
+class MessageAttachment(Base):
+    """Pièce jointe d'un message : capture, extrait de journal, configuration.
+    Table séparée plutôt que colonnes sur « messages » : la très grande majorité
+    des messages n'en portent pas, et une nouvelle table se crée toute seule au
+    démarrage sans toucher aux lignes existantes."""
+
+    __tablename__ = "message_attachments"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    message_id = Column(Integer, ForeignKey("messages.id"), nullable=False)
+    nom        = Column(String, nullable=False)    # nom d'origine, affiché au destinataire
+    type_mime  = Column(String, nullable=False)
+    taille     = Column(Integer, nullable=False)   # octets
+    chemin     = Column(String, nullable=False)    # emplacement sur disque, jamais exposé
+
+    message = relationship("Message", back_populates="piece_jointe")
 
 
 class Notification(Base):

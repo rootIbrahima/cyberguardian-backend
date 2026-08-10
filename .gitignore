@@ -30,3 +30,8 @@ cg_truffle_*/
 Thumbs.db
 .vscode/
 .idea/
+
+# Fichiers téléversés par les utilisateurs : pièces d'identité et diplômes des
+# candidats experts, pièces jointes des conversations. Le dépôt est public, ces
+# documents ne doivent jamais y entrer.
+uploads/

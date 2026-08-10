@@ -9,6 +9,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from horodatage import maintenant, maintenant_iso
 from database import get_db, SessionLocal
 from models import Conversation, Scan, User
 from auth import get_current_user
@@ -47,7 +48,7 @@ def _now() -> str:
 
 
 def _depuis_24h() -> str:
-    return (datetime.now() - timedelta(hours=24)).isoformat(timespec="seconds")
+    return (maintenant() - timedelta(hours=24)).isoformat(timespec="seconds")
 
 
 def _verifier_quota(db: Session, user_id: int, target: str) -> None:
@@ -226,7 +227,7 @@ def launch_scan(
         vulns      = len(issues),
         cve        = len(all_cves),
         date       = _now(),
-        created_at = datetime.now().isoformat(timespec="seconds"),
+        created_at = maintenant_iso(),
         results    = results,
         issues     = issues,
         conversations = [],

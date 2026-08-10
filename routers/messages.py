@@ -6,13 +6,16 @@ Messagerie interne client-expert (CDC §4.7) avec accès progressif en 3 niveaux
 Polling côté frontend toutes les 5 secondes, pas de WebSocket.
 """
 
-from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import timedelta
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from database import get_db
-from models import Conversation, ExpertProfile, Message, Scan, User
+from horodatage import anterieur_ou_egal, ecoule_depuis, lire, maintenant_iso
+from models import Conversation, ExpertProfile, Message, MessageAttachment, Scan, User
 from auth import get_current_user
 from routers.notifications import creer_notification
 
@@ -24,19 +27,33 @@ MOIS = ["jan", "fev", "mar", "avr", "mai", "jun",
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+UPLOAD_DIR = Path(__file__).resolve().parent.parent / "uploads" / "messages"
+
+# Types acceptés en pièce jointe : ce qu'un expert et un client s'échangent
+# réellement pour instruire une faille. SVG volontairement exclu, il peut
+# embarquer du script. Le type servi au téléchargement vient de cette table et
+# jamais de ce que déclare le client.
+TYPES_ACCEPTES = {
+    "image/png":       (".png",  bytes.fromhex("89504e47")),
+    "image/jpeg":      (".jpg",  bytes.fromhex("ffd8ff")),
+    "image/webp":      (".webp", b"RIFF"),
+    "image/gif":       (".gif",  b"GIF8"),
+    "application/pdf": (".pdf",  b"%PDF"),
+    "text/plain":      (".txt",  None),   # pas de signature binaire
+}
+TAILLE_MAX = 5 * 1024 * 1024   # 5 Mo, comme les pièces de candidature
+
+
 def _now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return maintenant_iso()
 
 
 def _humanize(iso: str | None) -> str:
     """'Il y a 5 min' / 'Il y a 3h' / 'Hier' / '15 avr.'"""
-    if not iso:
-        return ""
-    try:
-        dt = datetime.fromisoformat(iso)
-    except ValueError:
-        return iso
-    delta = datetime.now() - dt
+    dt = lire(iso)
+    if dt is None:
+        return iso or ""
+    delta = ecoule_depuis(iso)
     minutes = int(delta.total_seconds() // 60)
     if minutes < 1:
         return "À l'instant"
@@ -87,7 +104,7 @@ def _conv_to_dict(conv: Conversation, viewer: User) -> dict:
     }
 
 
-def _msg_to_dict(msg: Message, conv: Conversation) -> dict:
+def _msg_to_dict(msg: Message, conv: Conversation, viewer: User | None = None) -> dict:
     """Format attendu par MessageThread.jsx."""
     if msg.sender_id is None:
         sender = "system"
@@ -95,12 +112,55 @@ def _msg_to_dict(msg: Message, conv: Conversation) -> dict:
         sender = "client"
     else:
         sender = "expert"
-    try:
-        time_label = datetime.fromisoformat(msg.created_at).strftime("%H:%M")
-    except (ValueError, TypeError):
-        time_label = ""
-    return {"id": msg.id, "from": sender, "time": time_label, "text": msg.text,
-            "created_at": msg.created_at}
+    dt = lire(msg.created_at)
+    time_label = dt.strftime("%H:%M") if dt else ""
+
+    # Accusé de lecture, sur ses propres messages seulement : l'information
+    # existait déjà en base sans jamais être remontée à l'expéditeur.
+    lu = None
+    if viewer is not None and msg.sender_id == viewer.id:
+        lecture_autre = (conv.expert_last_read if viewer.id == conv.client_id
+                         else conv.client_last_read)
+        lu = anterieur_ou_egal(msg.created_at, lecture_autre)
+
+    piece = msg.piece_jointe
+    return {
+        "id":         msg.id,
+        "from":       sender,
+        "time":       time_label,
+        "text":       msg.text,
+        "created_at": msg.created_at,
+        "lu":         lu,
+        "piece":      ({"id": piece.id, "nom": piece.nom, "type": piece.type_mime,
+                        "taille": piece.taille} if piece else None),
+    }
+
+
+def _enregistrer_piece(upload: UploadFile) -> tuple[bytes, str, str]:
+    """Valide puis nomme une pièce jointe. Renvoie (contenu, type retenu, suffixe).
+
+    Le type est repris de notre table, jamais de la déclaration du client, et la
+    signature du fichier est confrontée à ce type : un exécutable renommé en
+    .png est refusé ici plutôt que servi plus tard."""
+    type_mime = (upload.content_type or "").split(";")[0].strip().lower()
+    if type_mime not in TYPES_ACCEPTES:
+        raise HTTPException(
+            status_code=415,
+            detail="Format refusé. Images, PDF et fichiers texte uniquement.",
+        )
+    contenu = upload.file.read()
+    if not contenu:
+        raise HTTPException(status_code=422, detail="Fichier vide")
+    if len(contenu) > TAILLE_MAX:
+        raise HTTPException(status_code=413, detail="Fichier trop volumineux (max 5 Mo)")
+
+    suffixe, signature = TYPES_ACCEPTES[type_mime]
+    if signature and not contenu.startswith(signature):
+        raise HTTPException(
+            status_code=415,
+            detail="Le contenu du fichier ne correspond pas à son format annoncé.",
+        )
+    return contenu, type_mime, suffixe
 
 
 def _get_conv_or_404(conv_id: int, db: Session, user: User) -> Conversation:
@@ -114,13 +174,38 @@ def _get_conv_or_404(conv_id: int, db: Session, user: User) -> Conversation:
 
 def mission_active(conv: Conversation) -> bool:
     """Niveau 3 actif : contrat signé il y a moins de 48h (CDC §4.2)."""
-    if conv.level < 3 or not conv.mission_start:
+    if conv.level < 3:
         return False
-    try:
-        start = datetime.fromisoformat(conv.mission_start)
-    except ValueError:
-        return False
-    return datetime.now() - start < timedelta(hours=48)
+    depuis = ecoule_depuis(conv.mission_start)
+    return depuis is not None and depuis < timedelta(hours=48)
+
+
+def _suites_envoi(conv: Conversation, auteur: User, apercu: str, db: Session):
+    """Notification du destinataire et passage éventuel au niveau 2. Partagé par
+    l'envoi de texte et l'envoi de pièce jointe, qui valent tous deux réponse."""
+    dest_id = conv.expert_id if auteur.id == conv.client_id else conv.client_id
+    creer_notification(
+        db, dest_id, "message",
+        title = f"Nouveau message : {conv.subject}",
+        body  = apercu[:120],
+        link  = "/messages",
+    )
+
+    # Niveau 1 → 2 : la première réponse de l'expert vaut acceptation de mission
+    if conv.level == 1 and auteur.id == conv.expert_id:
+        conv.level = 2
+        db.add(Message(
+            conversation_id = conv.id,
+            sender_id       = None,
+            text            = "Mission acceptée : l'expert a maintenant accès au score détaillé par catégorie (Niveau 2).",
+            created_at      = _now_iso(),
+        ))
+        creer_notification(
+            db, conv.client_id, "mission_level",
+            title = f"Mission acceptée : {conv.subject}",
+            body  = "L'expert a accepté votre demande et accède au score détaillé.",
+            link  = "/messages",
+        )
 
 
 def _attach_expert_profile(conv: Conversation, db: Session):
@@ -190,14 +275,15 @@ def create_conversation(
     if not expert:
         raise HTTPException(status_code=404, detail="Expert introuvable")
 
-    subject = (body.subject or "").strip()
+    subject   = (body.subject or "").strip()
+    last_scan = (
+        db.query(Scan)
+        .filter(Scan.user_id == current_user.id,
+                *([Scan.target == subject] if subject else []))
+        .order_by(Scan.id.desc())
+        .first()
+    )
     if not subject:
-        last_scan = (
-            db.query(Scan)
-            .filter(Scan.user_id == current_user.id)
-            .order_by(Scan.id.desc())
-            .first()
-        )
         subject = last_scan.target if last_scan else "Conseil sécurité"
 
     existing = (
@@ -217,6 +303,9 @@ def create_conversation(
         client_id  = current_user.id,
         expert_id  = expert.id,
         subject    = subject,
+        # Le scan est figé à la création : la conversation porte sur celui qui a
+        # motivé la demande, pas sur le dernier en date de la même cible.
+        scan_id    = last_scan.id if last_scan else None,
         level      = 1,
         created_at = _now_iso(),
     )
@@ -239,7 +328,10 @@ def conversation_scan(
     Niveau 3 : + accès au rapport complet (scan_id), expire 48h après signature.
     Le client (propriétaire) et l'admin voient toujours tout."""
     conv = _get_conv_or_404(conv_id, db, current_user)
-    scan = (
+    # Lien direct quand il existe. Le repli par comparaison de sujet ne sert que
+    # pour les conversations créées avant l'ajout de la colonne et qu'aucun scan
+    # ne permettait de rattacher.
+    scan = conv.scan if conv.scan_id else (
         db.query(Scan)
         .filter(Scan.user_id == conv.client_id, Scan.target == conv.subject)
         .order_by(Scan.id.desc())
@@ -288,7 +380,7 @@ def list_messages(
         conv.expert_last_read = now
     db.commit()
 
-    return [_msg_to_dict(m, conv) for m in msgs]
+    return [_msg_to_dict(m, conv, current_user) for m in msgs]
 
 
 @router.post("/{conv_id}/messages")
@@ -313,35 +405,91 @@ def send_message(
         created_at      = _now_iso(),
     )
     db.add(msg)
-
-    # Notifie l'autre participant du nouveau message
-    dest_id = conv.expert_id if current_user.id == conv.client_id else conv.client_id
-    creer_notification(
-        db, dest_id, "message",
-        title = f"Nouveau message : {conv.subject}",
-        body  = text[:120],
-        link  = "/messages",
-    )
-
-    # Niveau 1 → 2 : la première réponse de l'expert vaut acceptation de mission
-    if conv.level == 1 and current_user.id == conv.expert_id:
-        conv.level = 2
-        db.add(Message(
-            conversation_id = conv.id,
-            sender_id       = None,
-            text            = "Mission acceptée : l'expert a maintenant accès au score détaillé par catégorie (Niveau 2).",
-            created_at      = _now_iso(),
-        ))
-        creer_notification(
-            db, conv.client_id, "mission_level",
-            title = f"Mission acceptée : {conv.subject}",
-            body  = "L'expert a accepté votre demande et accède au score détaillé.",
-            link  = "/messages",
-        )
-
+    _suites_envoi(conv, current_user, text, db)
     db.commit()
     db.refresh(msg)
-    return _msg_to_dict(msg, conv)
+    return _msg_to_dict(msg, conv, current_user)
+
+
+@router.post("/{conv_id}/messages/piece-jointe")
+def send_attachment(
+    conv_id:      int,
+    fichier:      UploadFile = File(...),
+    text:         str        = Form(""),
+    db:           Session    = Depends(get_db),
+    current_user: User       = Depends(get_current_user),
+):
+    """Envoi d'une pièce jointe, avec un commentaire facultatif. Une capture ou
+    un extrait de journal valent souvent mieux qu'une description."""
+    conv = _get_conv_or_404(conv_id, db, current_user)
+    if current_user.id not in (conv.client_id, conv.expert_id):
+        raise HTTPException(status_code=403, detail="Seuls les participants peuvent écrire")
+
+    contenu, type_mime, suffixe = _enregistrer_piece(fichier)
+    legende = (text or "").strip()[:4000]
+
+    msg = Message(
+        conversation_id = conv.id,
+        sender_id       = current_user.id,
+        text            = legende,
+        created_at      = _now_iso(),
+    )
+    db.add(msg)
+    db.flush()   # besoin de l'id du message pour nommer le fichier
+
+    # Le nom sur disque est le nôtre : celui fourni par le client ne sert qu'à
+    # l'affichage et ne doit jamais décider d'un chemin.
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    chemin = UPLOAD_DIR / f"conv{conv.id}-msg{msg.id}{suffixe}"
+    chemin.write_bytes(contenu)
+
+    db.add(MessageAttachment(
+        message_id = msg.id,
+        nom        = Path(fichier.filename or f"piece{suffixe}").name[:120],
+        type_mime  = type_mime,
+        taille     = len(contenu),
+        chemin     = str(chemin),
+    ))
+    _suites_envoi(conv, current_user, legende or "Pièce jointe", db)
+    db.commit()
+    db.refresh(msg)
+    return _msg_to_dict(msg, conv, current_user)
+
+
+@router.get("/{conv_id}/pieces-jointes/{piece_id}")
+def download_attachment(
+    conv_id:      int,
+    piece_id:     int,
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(get_current_user),
+):
+    """Téléchargement d'une pièce jointe, réservé aux participants et à l'admin."""
+    conv  = _get_conv_or_404(conv_id, db, current_user)
+    piece = (
+        db.query(MessageAttachment)
+        .join(Message, Message.id == MessageAttachment.message_id)
+        .filter(MessageAttachment.id == piece_id, Message.conversation_id == conv.id)
+        .first()
+    )
+    if not piece:
+        raise HTTPException(status_code=404, detail="Pièce jointe introuvable")
+
+    fichier = Path(piece.chemin)
+    if not fichier.is_file():
+        raise HTTPException(status_code=410, detail="Pièce jointe absente du serveur")
+
+    # Le type servi vient de notre table, jamais de ce qui a été déclaré à
+    # l'envoi. Les images s'affichent dans le fil, le reste se télécharge.
+    en_ligne = piece.type_mime.startswith("image/")
+    disposition = "inline" if en_ligne else "attachment"
+    return Response(
+        content=fichier.read_bytes(),
+        media_type=piece.type_mime,
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{piece.nom}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.post("/{conv_id}/contract/sign")
