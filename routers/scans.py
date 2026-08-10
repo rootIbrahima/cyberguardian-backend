@@ -280,6 +280,15 @@ def _executer_scan(scan_id: int, target: str, asset_type: str) -> None:
         scan.results = results
         scan.issues  = issues
         db.commit()
+
+        # Le rapport rédigé est produit dans la foulée, le scan étant déjà
+        # marqué terminé : le client consulte ses résultats pendant ce temps et
+        # ne subit plus les 30 à 140 s du modèle au moment où il demande le PDF.
+        # L'échec est sans conséquence, le téléchargement le régénérera.
+        redaction = _generate_simple_explanation(scan.to_dict())
+        if redaction:
+            scan.results = {**(scan.results or {}), "rapport_ia": redaction}
+            db.commit()
     finally:
         db.close()
 
