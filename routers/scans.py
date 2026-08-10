@@ -310,11 +310,23 @@ def download_pdf(
     db:           Session = Depends(get_db),
     current_user: User    = Depends(get_current_user),
 ):
-    scan = _get_scan_or_404(scan_id, db, current_user)
-    scan_dict      = scan.to_dict()
-    ai_explanation = _generate_simple_explanation(scan_dict)
-    pdf_bytes      = generate_scan_pdf(scan_dict, ai_explanation=ai_explanation)
-    filename       = f"cyberguardian-{scan.target}.pdf"
+    scan      = _get_scan_or_404(scan_id, db, current_user)
+    scan_dict = scan.to_dict()
+
+    # Le texte rédigé est conservé avec le scan. Sans cela chaque téléchargement
+    # relançait le modèle, soit 30 à 140 s d'attente selon la charge du serveur,
+    # pour reproduire une analyse de résultats qui, eux, ne changent plus.
+    ai_explanation = (scan.results or {}).get("rapport_ia") or ""
+    if not ai_explanation:
+        ai_explanation = _generate_simple_explanation(scan_dict)
+        if ai_explanation:
+            # Réaffectation complète : SQLAlchemy ne détecte pas la modification
+            # d'une clé à l'intérieur d'une colonne JSON.
+            scan.results = {**(scan.results or {}), "rapport_ia": ai_explanation}
+            db.commit()
+
+    pdf_bytes = generate_scan_pdf(scan_dict, ai_explanation=ai_explanation)
+    filename  = f"cyberguardian-{scan.target}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -712,10 +724,17 @@ def _generate_simple_explanation(scan: dict) -> str:
             headers={"Authorization": f"Bearer {OLLAMA_KEY}"},
             json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "keep_alive": OLLAMA_KEEP_ALIVE,
                   "think": False,   # qwen3.6 : réponse directe sans raisonnement
-                  "options": {"num_predict": 600, "temperature": 0.6}},
-            timeout=60,
+                  # La consigne demande 6 à 9 phrases, mesurées entre 255 et 370
+                  # jetons. Le plafond de 600 n'ajoutait aucun texte, seulement
+                  # du temps d'attente dans le pire cas.
+                  "options": {"num_predict": 400, "temperature": 0.6}},
+            # Le serveur d'inférence est mutualisé : le même prompt a été
+            # chronométré à 28 s puis à 139 s. Un délai de 60 s coupait la
+            # génération et le rapport arrivait vide, sans trace.
+            timeout=httpx.Timeout(connect=15.0, read=180.0, write=15.0, pool=5.0),
         )
         resp.raise_for_status()
         return _couper_a_la_phrase(resp.json().get("response", ""))
-    except Exception:
+    except Exception as e:
+        print(f"  [!] rapport rédigé indisponible pour {scan.get('target')} : {e}")
         return ""
