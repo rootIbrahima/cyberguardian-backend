@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from database import get_db
 import models
 import auth as auth_utils
@@ -10,16 +10,29 @@ import auth as auth_utils
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+# Longueur minimale du mot de passe. Elle n'existait que dans les formulaires,
+# où elle valait 6 à l'inscription et 8 au changement, et où une requête directe
+# la contournait : le serveur acceptait un mot de passe d'un seul caractère.
+# La borne haute est celle de bcrypt, qui ignore au-delà de 72 octets : mieux
+# vaut refuser que de tronquer en silence et rendre deux mots de passe
+# différents équivalents.
+MDP_MIN = 8
+MDP_MAX = 72
+
+_MDP = Field(min_length=MDP_MIN, max_length=MDP_MAX,
+             description=f"Entre {MDP_MIN} et {MDP_MAX} caractères")
+
+
 class RegisterBody(BaseModel):
     email:    str
     name:     str
-    password: str
+    password: str = _MDP
     role:     str = "client"
 
 
 class ChangePasswordBody(BaseModel):
     current_password: str
-    new_password:     str
+    new_password:     str = _MDP
 
 
 def _token_response(user: models.User) -> dict:
