@@ -4,7 +4,7 @@ from dataclasses import asdict
 
 import httpx
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -105,11 +105,15 @@ class AskRequest(BaseModel):
 @router.post("")
 def launch_scan(
     body:         ScanRequest,
+    taches:       BackgroundTasks,
     db:           Session = Depends(get_db),
     current_user: User    = Depends(get_current_user),
 ):
     # Périmètre externe uniquement : une cible interne (boucle locale, réseau
     # privé, métadonnées cloud) ferait de la plateforme un relais de scan.
+    if body.asset_type not in ("domain", "ip", "url", "github"):
+        raise HTTPException(status_code=400, detail="Type d'actif invalide")
+
     if body.asset_type in ("domain", "url", "ip"):
         try:
             resoudre_et_valider(body.target)
@@ -118,103 +122,11 @@ def launch_scan(
 
     _verifier_quota(db, current_user.id, body.target)
 
-    results = {}
-    issues  = []
-    all_cves      = []
-    server_banner = ""
-
-    if body.asset_type in ("domain", "url", "ip"):
-        ssl = check_ssl(body.target)
-        results["ssl"] = {
-            "valid":             ssl.valid,
-            "expired":           ssl.expired,
-            "self_signed":       ssl.self_signed,
-            "days_until_expiry": ssl.days_until_expiry,
-            "expiry_date":       ssl.expiry_date,
-            "issued_to":         ssl.issued_to,
-            "issued_by":         ssl.issued_by,
-            "tls_version":       ssl.tls_version,
-            "cipher_suite":      ssl.cipher_suite,
-            "sans":              ssl.sans,
-            "grade":             ssl.grade,
-            "score":             ssl.score,
-            "issues":            ssl.issues,
-            "error":             ssl.error,
-        }
-        issues = ssl.issues
-
-        tls_cves                 = check_tls_cves(ssl.tls_version or "", ssl.cipher_suite or "")
-        server_banner, svc_cves  = check_service_cves(body.target)
-        all_cves                 = enrich_cves(tls_cves + svc_cves, id_key="id")
-        results["cves"]          = all_cves
-        results["server_banner"] = server_banner
-
-        headers = scan_headers(body.target)
-        results["headers"] = asdict(headers)
-        issues = issues + headers.issues
-
-        ports = check_ports(body.target)
-        results["ports"] = asdict(ports)
-        issues = issues + ports.issues
-
-        reputation = check_reputation(body.target)
-        results["reputation"] = asdict(reputation)
-        issues = issues + reputation.issues
-
-        score_parts = {"ssl": ssl.score, "headers": headers.score,
-                       "ports": ports.score, "reputation": reputation.score}
-
-        # DNS et WHOIS n'ont de sens que pour un domaine, pas une IP brute
-        if body.asset_type in ("domain", "url"):
-            dns = check_dns(body.target)
-            results["dns"] = asdict(dns)
-            issues = issues + dns.issues
-            score_parts["dns"] = dns.score
-
-            whois = check_whois(body.target)
-            results["whois"] = asdict(whois)
-            issues = issues + whois.issues
-
-        score_detail            = calculate_score(score_parts)
-        results["score_detail"] = score_detail
-        total_score             = score_detail["score"]
-
-    elif body.asset_type == "github":
-        gh = scan_github(body.target)
-        # Enrichit les CVE de dépendances (Safety) avec l'EPSS avant stockage
-        enrich_cves(gh["safety"].get("findings", []), id_key="cve")
-        results["github_info"] = gh["github_info"]
-        results["bandit"]      = gh["bandit"]
-        results["safety"]      = gh["safety"]
-        results["trufflehog"]  = gh["trufflehog"]
-        results["npm_audit"]   = gh.get("npm_audit")
-        results["langage"]     = gh.get("langage", "N/A")
-        results["score_max"]   = gh.get("max", 30)
-        total_score            = gh["score"]
-        all_cves               = gh["safety"].get("findings", [])
-        _sev_fr = {"LOW": "BAS", "MEDIUM": "MOYEN", "HIGH": "HAUT"}
-        issues = [
-            {
-                "severity": _sev_fr.get(f["severity"], f["severity"]),
-                "title":    f["issue"],
-                "desc":     f"Fichier : {f['file']}, ligne {f['line']}",
-                "color":    "red" if f["severity"] == "HIGH" else "orange" if f["severity"] == "MEDIUM" else "yellow",
-                "tool":     "scan_bandit()",
-            }
-            for f in gh["bandit"].get("findings", [])
-        ] + [
-            {
-                "severity": "HAUT",
-                "title":    f"Secret exposé : {f['type']}",
-                "desc":     f"Fichier : {f['file']}, ligne {f['line']}",
-                "color":    "red",
-                "tool":     "scan_trufflehog()",
-            }
-            for f in gh["trufflehog"].get("findings", [])
-        ]
-    else:
-        raise HTTPException(status_code=400, detail="Type d'actif invalide")
-
+    # Le scan est enregistré tout de suite, à l'état « en cours », et les outils
+    # tournent ensuite. Menée dans la requête, l'analyse laissait le client
+    # devant un bouton figé : 68 s mesurées sur un domaine avec scan de ports,
+    # pendant que la page de progression n'avait plus rien à montrer une fois
+    # atteinte. Elle suit désormais l'avancement réel.
     type_labels = {"domain": "Domaine", "ip": "IP", "url": "URL", "github": "GitHub"}
 
     scan = Scan(
@@ -222,20 +134,154 @@ def launch_scan(
         target     = body.target,
         type       = body.asset_type,
         type_label = type_labels.get(body.asset_type, "Domaine"),
-        score      = total_score,
-        status     = "completed",
-        vulns      = len(issues),
-        cve        = len(all_cves),
+        score      = None,
+        status     = "running",
+        vulns      = 0,
+        cve        = 0,
         date       = _now(),
         created_at = maintenant_iso(),
-        results    = results,
-        issues     = issues,
+        results    = {},
+        issues     = [],
         conversations = [],
     )
     db.add(scan)
     db.commit()
     db.refresh(scan)
+
+    taches.add_task(_executer_scan, scan.id, body.target, body.asset_type)
     return scan.to_dict()
+
+
+def _executer_scan(scan_id: int, target: str, asset_type: str) -> None:
+    """Exécute les outils et complète le scan déjà créé.
+
+    Tourne après l'envoi de la réponse : la session de la requête est fermée,
+    il en faut une dédiée. Toute erreur laisse le scan en « failed » plutôt
+    qu'indéfiniment « running », sans quoi la page de progression tournerait
+    sans fin."""
+    try:
+        results = {}
+        issues  = []
+        all_cves      = []
+        server_banner = ""
+
+        if asset_type in ("domain", "url", "ip"):
+            ssl = check_ssl(target)
+            results["ssl"] = {
+                "valid":             ssl.valid,
+                "expired":           ssl.expired,
+                "self_signed":       ssl.self_signed,
+                "days_until_expiry": ssl.days_until_expiry,
+                "expiry_date":       ssl.expiry_date,
+                "issued_to":         ssl.issued_to,
+                "issued_by":         ssl.issued_by,
+                "tls_version":       ssl.tls_version,
+                "cipher_suite":      ssl.cipher_suite,
+                "sans":              ssl.sans,
+                "grade":             ssl.grade,
+                "score":             ssl.score,
+                "issues":            ssl.issues,
+                "error":             ssl.error,
+            }
+            issues = ssl.issues
+
+            tls_cves                 = check_tls_cves(ssl.tls_version or "", ssl.cipher_suite or "")
+            server_banner, svc_cves  = check_service_cves(target)
+            all_cves                 = enrich_cves(tls_cves + svc_cves, id_key="id")
+            results["cves"]          = all_cves
+            results["server_banner"] = server_banner
+
+            headers = scan_headers(target)
+            results["headers"] = asdict(headers)
+            issues = issues + headers.issues
+
+            ports = check_ports(target)
+            results["ports"] = asdict(ports)
+            issues = issues + ports.issues
+
+            reputation = check_reputation(target)
+            results["reputation"] = asdict(reputation)
+            issues = issues + reputation.issues
+
+            score_parts = {"ssl": ssl.score, "headers": headers.score,
+                           "ports": ports.score, "reputation": reputation.score}
+
+            # DNS et WHOIS n'ont de sens que pour un domaine, pas une IP brute
+            if asset_type in ("domain", "url"):
+                dns = check_dns(target)
+                results["dns"] = asdict(dns)
+                issues = issues + dns.issues
+                score_parts["dns"] = dns.score
+
+                whois = check_whois(target)
+                results["whois"] = asdict(whois)
+                issues = issues + whois.issues
+
+            score_detail            = calculate_score(score_parts)
+            results["score_detail"] = score_detail
+            total_score             = score_detail["score"]
+
+        elif asset_type == "github":
+            gh = scan_github(target)
+            # Enrichit les CVE de dépendances (Safety) avec l'EPSS avant stockage
+            enrich_cves(gh["safety"].get("findings", []), id_key="cve")
+            results["github_info"] = gh["github_info"]
+            results["bandit"]      = gh["bandit"]
+            results["safety"]      = gh["safety"]
+            results["trufflehog"]  = gh["trufflehog"]
+            results["npm_audit"]   = gh.get("npm_audit")
+            results["langage"]     = gh.get("langage", "N/A")
+            results["score_max"]   = gh.get("max", 30)
+            total_score            = gh["score"]
+            all_cves               = gh["safety"].get("findings", [])
+            _sev_fr = {"LOW": "BAS", "MEDIUM": "MOYEN", "HIGH": "HAUT"}
+            issues = [
+                {
+                    "severity": _sev_fr.get(f["severity"], f["severity"]),
+                    "title":    f["issue"],
+                    "desc":     f"Fichier : {f['file']}, ligne {f['line']}",
+                    "color":    "red" if f["severity"] == "HIGH" else "orange" if f["severity"] == "MEDIUM" else "yellow",
+                    "tool":     "scan_bandit()",
+                }
+                for f in gh["bandit"].get("findings", [])
+            ] + [
+                {
+                    "severity": "HAUT",
+                    "title":    f"Secret exposé : {f['type']}",
+                    "desc":     f"Fichier : {f['file']}, ligne {f['line']}",
+                    "color":    "red",
+                    "tool":     "scan_trufflehog()",
+                }
+                for f in gh["trufflehog"].get("findings", [])
+            ]
+        else:
+            raise ValueError("Type d'actif invalide")
+    except Exception as e:
+        print(f"  [!] scan {scan_id} en échec sur {target} : {e}")
+        db = SessionLocal()
+        try:
+            rate = db.query(Scan).filter(Scan.id == scan_id).first()
+            if rate:
+                rate.status = "failed"
+                db.commit()
+        finally:
+            db.close()
+        return
+
+    db = SessionLocal()
+    try:
+        scan = db.query(Scan).filter(Scan.id == scan_id).first()
+        if not scan:
+            return   # supprimé pendant l'analyse
+        scan.score   = total_score
+        scan.status  = "completed"
+        scan.vulns   = len(issues)
+        scan.cve     = len(all_cves)
+        scan.results = results
+        scan.issues  = issues
+        db.commit()
+    finally:
+        db.close()
 
 
 @router.get("")
@@ -359,12 +405,13 @@ def delete_scan(
 @router.post("/{scan_id}/rerun")
 def rerun_scan(
     scan_id:      int,
+    taches:       BackgroundTasks,
     db:           Session = Depends(get_db),
     current_user: User    = Depends(get_current_user),
 ):
     scan = _get_scan_or_404(scan_id, db, current_user)
     body = ScanRequest(target=scan.target, asset_type=scan.type)
-    return launch_scan(body, db, current_user)
+    return launch_scan(body, taches, db, current_user)
 
 
 @router.post("/{scan_id}/ask")
