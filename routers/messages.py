@@ -8,8 +8,8 @@ Polling côté frontend toutes les 5 secondes, pas de WebSocket.
 
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from database import get_db
 from models import Conversation, ExpertProfile, Message, Scan, User
@@ -128,6 +128,18 @@ def _attach_expert_profile(conv: Conversation, db: Session):
     conv.expert._profile_cache = profile
 
 
+def _attach_expert_profiles(convs: list[Conversation], db: Session):
+    """Même chose pour une liste, en une seule requête. Charger les profils un
+    par un coûtait trois requêtes par conversation à chaque sondage."""
+    if not convs:
+        return
+    ids      = {c.expert_id for c in convs}
+    profils  = db.query(ExpertProfile).filter(ExpertProfile.user_id.in_(ids)).all()
+    par_user = {p.user_id: p for p in profils}
+    for c in convs:
+        c.expert._profile_cache = par_user.get(c.expert_id)
+
+
 # ── Modèles ───────────────────────────────────────────────────────────────────
 
 class ConversationCreate(BaseModel):
@@ -136,7 +148,8 @@ class ConversationCreate(BaseModel):
 
 
 class MessageCreate(BaseModel):
-    text: str
+    # Borne haute : rien ne limitait la taille d'un message côté serveur.
+    text: str = Field(max_length=4000)
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -152,9 +165,16 @@ def list_conversations(
             (Conversation.client_id == current_user.id)
             | (Conversation.expert_id == current_user.id)
         )
-    convs = q.order_by(Conversation.id.desc()).all()
-    for c in convs:
-        _attach_expert_profile(c, db)
+    convs = (
+        q.options(
+            selectinload(Conversation.messages),
+            joinedload(Conversation.client),
+            joinedload(Conversation.expert),
+        )
+        .order_by(Conversation.id.desc())
+        .all()
+    )
+    _attach_expert_profiles(convs, db)
     return [_conv_to_dict(c, current_user) for c in convs]
 
 
@@ -249,14 +269,16 @@ def conversation_scan(
 @router.get("/{conv_id}/messages")
 def list_messages(
     conv_id:      int,
-    since:        str | None = None,
+    apres:        int | None = None,
     db:           Session    = Depends(get_db),
     current_user: User       = Depends(get_current_user),
 ):
+    """Fil complet, ou seulement les messages postérieurs à « apres » (id du
+    dernier message déjà affiché) pour les rafraîchissements périodiques."""
     conv = _get_conv_or_404(conv_id, db, current_user)
     msgs = conv.messages
-    if since:
-        msgs = [m for m in msgs if (m.created_at or "") > since]
+    if apres is not None:
+        msgs = [m for m in msgs if m.id > apres]
 
     # Marque comme lu pour le compteur de non-lus
     now = _now_iso()
