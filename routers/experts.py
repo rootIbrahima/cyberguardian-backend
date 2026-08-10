@@ -52,9 +52,12 @@ def list_experts(
     il expose l'identité, la spécialité et le tarif de personnes réelles."""
     from models import Conversation
 
+    # Son propre profil n'a rien à faire dans un annuaire dont l'objet est de
+    # choisir un interlocuteur : personne ne se contacte soi-même.
     profiles = (
         db.query(ExpertProfile)
-        .filter(ExpertProfile.status == "approved")
+        .filter(ExpertProfile.status == "approved",
+                ExpertProfile.user_id != current_user.id)
         .order_by(ExpertProfile.id)
         .all()
     )
