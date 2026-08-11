@@ -18,7 +18,6 @@ from models import GitHubConnection, RepoAutorisation
 from routers.github_oauth import _repo_slug
 from routers.notifications import creer_notification
 from services.chiffrement import dechiffrer
-from services.notifications import notifier_utilisateur
 
 GH_API = "https://api.github.com"
 
@@ -163,17 +162,12 @@ def proposer_correction(user_id: int, repo_target: str, scan_dict: dict, db: Ses
     # canaux additionnels éventuels, voir services/notifications.py) et dans
     # la plateforme elle-même, pour ceux qui n'ont lié aucun canal externe.
     resume = "\n".join(f"• {c['paquet']} : {c['avant']} → {c['apres']}" for c in changements)
-    notifier_utilisateur(
-        user_id,
-        f"Correctif proposé : {slug}",
-        f"{resume}\n\nRelisez et fusionnez la Pull Request :\n{pr_url}",
-        db,
-    )
     creer_notification(
         db, user_id, "remediation",
-        title = f"Correctif proposé : {slug}",
-        body  = resume,
-        link  = pr_url,
+        title   = f"Correctif proposé : {slug}",
+        body    = resume,
+        externe = f"{resume}\n\nRelisez et fusionnez la Pull Request :\n{pr_url}",
+        link    = pr_url,
     )
     db.commit()
 

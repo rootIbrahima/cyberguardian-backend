@@ -13,6 +13,7 @@ from horodatage import maintenant_iso
 from database import get_db
 from models import Notification, User
 from auth import get_current_user
+from services.notifications import notifier_apres_commit
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -22,7 +23,8 @@ def _now_iso() -> str:
 
 
 def creer_notification(db: Session, user_id: int, type: str, title: str,
-                       body: str | None = None, link: str | None = None) -> Notification:
+                       body: str | None = None, link: str | None = None,
+                       externe: str | None = None) -> Notification:
     """Appelée par les autres routeurs au moment de l'événement (nouveau message,
     mission acceptée, contrat signé, candidature...). Ne fait pas le commit :
     l'appelant commit avec le reste de sa transaction."""
@@ -35,6 +37,12 @@ def creer_notification(db: Session, user_id: int, type: str, title: str,
         created_at = _now_iso(),
     )
     db.add(notif)
+
+    # Le même événement part sur les canaux externes du destinataire : Telegram
+    # s'il a lié son compte, plus tout canal déclaré dans APPRISE_URLS. Le
+    # paramètre « externe » permet un texte plus complet là-bas qu'à l'écran,
+    # où la place est comptée.
+    notifier_apres_commit(db, user_id, title, externe or body or title)
     return notif
 
 
