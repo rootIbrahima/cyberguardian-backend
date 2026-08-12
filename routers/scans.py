@@ -13,6 +13,8 @@ from horodatage import maintenant, maintenant_iso
 from database import get_db, SessionLocal
 from models import Conversation, Scan, User
 from auth import get_current_user
+from routers.notifications import creer_notification
+from services.comparaison import comparer, resumer
 from tools.check_dns import check_dns
 from tools.check_whois import check_whois
 from tools.check_epss import enrich_cves
@@ -281,6 +283,12 @@ def _executer_scan(scan_id: int, target: str, asset_type: str) -> None:
         scan.issues  = issues
         db.commit()
 
+        # Ce que ce scan change par rapport au précédent part immédiatement sur
+        # les canaux du propriétaire. C'est la raison d'être d'une surveillance :
+        # le rapport n'informe que celui qui vient déjà le consulter, l'alerte
+        # va chercher celui qui ne sait pas encore qu'il doit le faire.
+        _alerter_sur_evolution(db, scan)
+
         # Le rapport rédigé est produit dans la foulée, le scan étant déjà
         # marqué terminé : le client consulte ses résultats pendant ce temps et
         # ne subit plus les 30 à 140 s du modèle au moment où il demande le PDF.
@@ -291,6 +299,48 @@ def _executer_scan(scan_id: int, target: str, asset_type: str) -> None:
             db.commit()
     finally:
         db.close()
+
+
+def _alerter_sur_evolution(db: Session, scan: Scan) -> None:
+    """Compare le scan au précédent de la même cible et prévient son
+    propriétaire de ce qui a changé.
+
+    L'échec reste sans conséquence sur le scan : celui-ci est déjà enregistré et
+    consultable, une alerte manquée ne doit pas le remettre en cause. Elle est
+    donc journalisée, pas propagée."""
+    if not scan.user_id:
+        return
+    try:
+        precedent = (
+            db.query(Scan)
+            .filter(
+                Scan.user_id == scan.user_id,
+                Scan.target  == scan.target,
+                Scan.status  == "completed",
+                Scan.id      != scan.id,
+            )
+            .order_by(Scan.id.desc())
+            .first()
+        )
+        alertes = comparer(precedent.to_dict() if precedent else None, scan.to_dict())
+        if not alertes:
+            return
+
+        titre, corps = resumer(scan.target, alertes)
+        creer_notification(
+            db, scan.user_id,
+            type    = "alerte_securite",
+            title   = titre,
+            # Le panneau de notifications ne montre que les intitulés : le détail
+            # de chaque écart y serait illisible, il est réservé au canal externe.
+            body    = " · ".join(a.titre for a in alertes),
+            link    = f"/scan-results/{scan.id}",
+            externe = corps,
+        )
+        db.commit()
+    except Exception as e:
+        print(f"  [!] alerte d'évolution non émise pour {scan.target} : {e}")
+        db.rollback()
 
 
 @router.get("")
