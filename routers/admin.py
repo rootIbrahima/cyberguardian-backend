@@ -13,6 +13,7 @@ from database import get_db
 from models import Conversation, ExpertProfile, RepoAutorisation, Scan, User
 from auth import get_current_user
 from services.remediation import proposer_correction
+from services.sante import etat_complet
 from routers.github_oauth import _repo_slug
 from routers.notifications import creer_notification
 
@@ -226,6 +227,19 @@ def toggle_user(
     user.is_active = not user.is_active
     db.commit()
     return {"id": user.id, "is_active": bool(user.is_active)}
+
+
+@router.get("/sante")
+def sante(
+    db: Session = Depends(get_db),
+    _:  User    = Depends(require_admin),
+):
+    """État des services dont dépend la plateforme : canaux de notification,
+    modèle de langage, URL publiques, sources de réputation, scans anormaux.
+
+    Réservé à l'administrateur : la réponse nomme les services internes et
+    l'état de leur configuration, ce qui renseignerait utilement un attaquant."""
+    return etat_complet(db)
 
 
 @router.get("/stats")
