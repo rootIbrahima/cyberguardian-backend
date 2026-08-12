@@ -13,6 +13,7 @@ import string
 from datetime import datetime, timedelta
 
 import httpx
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from models import TelegramCode, TelegramLink, User
@@ -76,15 +77,27 @@ def verifier_code_et_lier(code: str, chat_id: str, db: Session) -> dict:
         return {"succes": False,
                 "erreur": "Code expiré. Générez un nouveau code depuis la plateforme."}
 
-    # Ce chat_id est-il déjà lié à un AUTRE compte ?
-    existant = db.query(TelegramLink).filter(
+    # Ce chat_id appartient-il déjà à un AUTRE compte ? Le contrôle porte sur
+    # tous les liens, actifs ou non : la contrainte d'unicité de la colonne,
+    # elle, ignore le champ « actif ». Ne regarder que les liens actifs laissait
+    # un lien désactivé franchir ce test puis briser l'écriture sur la
+    # contrainte — erreur 500, aucune réponse dans Telegram, et l'utilisateur
+    # devant un bot muet sans savoir pourquoi.
+    autres = db.query(TelegramLink).filter(
         TelegramLink.chat_id == chat_id,
         TelegramLink.user_id != record.user_id,
-        TelegramLink.actif.is_(True),
-    ).first()
-    if existant:
+    ).all()
+
+    if any(lien.actif for lien in autres):
         return {"succes": False,
                 "erreur": "Ce compte Telegram est déjà lié à un autre compte de notre plateforme."}
+
+    # Les liens restants sont désactivés : leur titulaire s'est délié, le chat_id
+    # est donc libre. La ligne est supprimée plutôt que conservée, faute de quoi
+    # l'identifiant resterait réservé à vie par la contrainte d'unicité.
+    for lien in autres:
+        db.delete(lien)
+    db.flush()
 
     # Crée ou met à jour le lien
     lien = db.query(TelegramLink).filter(TelegramLink.user_id == record.user_id).first()
@@ -96,7 +109,15 @@ def verifier_code_et_lier(code: str, chat_id: str, db: Session) -> dict:
         db.add(TelegramLink(user_id=record.user_id, chat_id=chat_id))
 
     record.utilise = True
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Dernier filet : quoi qu'il arrive, l'utilisateur reçoit une phrase.
+        # Une exception remonterait en 500 et le bot ne répondrait rien.
+        db.rollback()
+        return {"succes": False,
+                "erreur": "Liaison impossible, ce compte Telegram est déjà utilisé "
+                          "ailleurs. Déliez-le depuis l'autre compte, puis réessayez."}
 
     return {
         "succes":  True,
