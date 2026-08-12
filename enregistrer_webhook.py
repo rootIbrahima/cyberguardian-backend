@@ -9,6 +9,16 @@ Usage (depuis le dossier backend/) :
     python enregistrer_webhook.py                      # détection auto via ngrok
     python enregistrer_webhook.py https://mon-domaine  # URL explicite
 
+L'URL doit être celle qui atteint réellement FastAPI depuis l'extérieur, préfixe
+de reverse proxy compris. En production, nginx expose l'API sous /api :
+
+    https://cyberguardian.207-180-196-65.nip.io/api
+
+Le webhook y a été déclaré sans ce préfixe pendant un temps ; les messages
+tombaient alors sur le gestionnaire de fichiers statiques, qui refuse le POST,
+et plus personne ne pouvait lier son compte. Rien ne le signalait côté
+plateforme, l'erreur n'étant visible que dans getWebhookInfo.
+
 Le secret n'est jamais affiché ni saisi au clavier : il est lu depuis .env.
 """
 
@@ -57,8 +67,12 @@ def main() -> int:
 
     r = httpx.post(
         f"https://api.telegram.org/bot{token}/setWebhook",
+        # Les mises à jour en attente sont des tentatives de liaison bien
+        # réelles, accumulées pendant que le webhook était injoignable : les
+        # jeter les ferait disparaître sans trace. Un code périmé qui se rejoue
+        # est simplement refusé, ce qui est moins grave qu'une demande perdue.
         data={"url": url, "secret_token": secret,
-              "drop_pending_updates": "true"},
+              "drop_pending_updates": "false"},
         timeout=20,
     )
     reponse = r.json()
@@ -71,7 +85,11 @@ def main() -> int:
     print("Webhook enregistré.")
     print("  url               :", infos.get("url"))
     print("  maj en attente    :", infos.get("pending_update_count", 0))
-    print("  dernière erreur   :", infos.get("last_error_message", "aucune"))
+    erreur = infos.get("last_error_message")
+    print("  dernière erreur   :", erreur or "aucune")
+    if erreur and "405" in erreur:
+        print("                      le POST atteint le serveur web et non FastAPI :")
+        print("                      le préfixe du reverse proxy manque dans l'URL")
 
     if base != config.get("PUBLIC_BASE_URL", "").rstrip("/"):
         print()
