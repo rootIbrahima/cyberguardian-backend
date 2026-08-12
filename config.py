@@ -52,10 +52,15 @@ TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
 # de ses dépôts (l'agent ouvre une Pull Request, jamais de push direct).
 GITHUB_CLIENT_ID     = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
-# URL publique du backend (tunnel ngrok en dev), cible du callback OAuth
-PUBLIC_BASE_URL      = os.getenv("PUBLIC_BASE_URL", "")
-# URL du frontend, pour rediriger le client après l'autorisation
-FRONTEND_URL         = os.getenv("FRONTEND_URL", "http://localhost:5173")
+# URL publique du backend, cible du callback OAuth. Elle doit désigner ce qui
+# atteint réellement FastAPI depuis l'extérieur, préfixe du reverse proxy
+# compris : en production nginx expose l'API sous /api, et l'oublier envoie le
+# callback sur les fichiers statiques. La barre finale est retirée, sans quoi
+# l'URL construite comporterait un double séparateur.
+PUBLIC_BASE_URL      = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+# URL du frontend, pour rediriger le client après l'autorisation. Celle-ci
+# désigne le site, servi à la racine : elle ne porte pas le préfixe /api.
+FRONTEND_URL         = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
 
 # Réputation (cinquième critère du score) : clés gratuites après inscription.
 #   https://www.virustotal.com/gui/my-apikey
@@ -80,3 +85,65 @@ SMTP_PORT     = os.getenv("SMTP_PORT", "587")
 SMTP_USER     = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM     = os.getenv("SMTP_FROM", "")   # à défaut, SMTP_USER fait l'expéditeur
+
+
+# ── Cohérence de la configuration ─────────────────────────────────────────────
+
+BOT_PAR_DEFAUT = "CyberGuardianBot"
+
+
+def _developpement(url: str) -> bool:
+    """URL d'un poste de développement : boucle locale ou tunnel temporaire."""
+    return any(marque in url for marque in
+               ("localhost", "127.0.0.1", "0.0.0.0", "ngrok", ".local"))
+
+
+def incoherences() -> list[str]:
+    """Écarts de configuration qui ne peuvent pas relever d'une intention.
+
+    Trois pannes ont eu la même origine : une valeur de développement laissée
+    dans le .env du serveur, ou l'inverse. Aucune ne se voyait au démarrage,
+    seulement à l'usage et parfois des heures plus tard. Elles se voient ici.
+
+    La liste n'interrompt pas le démarrage : chacun de ces défauts ne casse
+    qu'une fonction — l'autorisation GitHub, la liaison Telegram — alors qu'un
+    refus de démarrer priverait les clients de toute la plateforme, scans
+    compris. Le remède serait pire que le mal."""
+    problemes = []
+
+    if PUBLIC_BASE_URL and FRONTEND_URL and _developpement(PUBLIC_BASE_URL) != _developpement(FRONTEND_URL):
+        problemes.append(
+            "PUBLIC_BASE_URL et FRONTEND_URL mélangent développement et production.\n"
+            f"    PUBLIC_BASE_URL = {PUBLIC_BASE_URL}\n"
+            f"    FRONTEND_URL    = {FRONTEND_URL}\n"
+            "    L'autorisation GitHub renverra le client sur le mauvais site."
+        )
+
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_BOT_USERNAME == BOT_PAR_DEFAUT:
+        problemes.append(
+            f"TELEGRAM_BOT_USERNAME absent, repli sur @{BOT_PAR_DEFAUT} qui n'est\n"
+            "    pas votre bot. Les liens de liaison mèneront ailleurs, personne ne\n"
+            "    pourra lier son compte, et rien d'autre ne le signalera."
+        )
+
+    if SMTP_HOST and not (SMTP_USER and SMTP_PASSWORD):
+        problemes.append(
+            "SMTP_HOST est renseigné mais SMTP_USER ou SMTP_PASSWORD manque :\n"
+            "    le canal e-mail est inactif et les alertes ne partiront que sur Telegram."
+        )
+
+    return problemes
+
+
+def signaler_incoherences() -> None:
+    """Affiche les écarts au démarrage, dans un cadre repérable au milieu des
+    lignes d'accès d'uvicorn — c'est là que l'exploitant les cherchera."""
+    problemes = incoherences()
+    if not problemes:
+        return
+    print("\n" + "=" * 72)
+    print("  CONFIGURATION INCOHÉRENTE".center(72))
+    print("=" * 72)
+    for probleme in problemes:
+        print(f"  [!] {probleme}")
+    print("=" * 72 + "\n")

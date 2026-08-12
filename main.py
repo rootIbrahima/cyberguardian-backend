@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from config import FRONTEND_URL
+from config import FRONTEND_URL, signaler_incoherences
 from database import engine
 from models import Base
 from routers import scans, experts, messages, admin, notifications, statistiques
@@ -42,6 +42,10 @@ app.include_router(github_oauth.router)
 
 @app.on_event("startup")
 def demarrage():
+    # Une valeur de développement laissée dans le .env du serveur ne se voyait
+    # jusqu'ici qu'à l'usage, quand un client butait sur la fonction cassée.
+    signaler_incoherences()
+
     # Charge le modèle en mémoire GPU sans bloquer le démarrage : le premier
     # client n'attend pas les quinze secondes de chargement.
     prechauffer_modele()
