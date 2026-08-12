@@ -14,6 +14,10 @@ class User(Base):
     role          = Column(String, default="client")   # client | expert | admin
     is_active     = Column(Boolean, default=True)
     created_at    = Column(String)
+    # Alertes par e-mail vers l'adresse du compte. Actif par défaut : sur une
+    # plateforme de surveillance, un client qui ignore qu'un secret a fuité est
+    # moins bien servi qu'un client qui reçoit un message de trop.
+    alertes_email = Column(Boolean, default=True, nullable=False, server_default="true")
 
     scans = relationship("Scan", back_populates="user", lazy="dynamic")
 

@@ -66,5 +66,17 @@ ABUSEIPDB_API_KEY  = os.getenv("ABUSEIPDB_API_KEY", "")
 
 # Canaux de notification additionnels (Apprise), voir services/notifications.py.
 # Liste d'URLs séparées par des virgules (ex. mailto://user:motdepasse@gmail.com,
-# slack://TokenA/TokenB/TokenC/#canal). Vide par défaut : seul Telegram est utilisé.
+# slack://TokenA/TokenB/TokenC/#canal). Ces canaux reçoivent les notifications de
+# tous les utilisateurs : ils conviennent à une adresse d'exploitation, pas au
+# canal personnel d'un client, qui est résolu à l'envoi.
 APPRISE_URLS = os.getenv("APPRISE_URLS", "")
+
+# Compte d'envoi des alertes par e-mail. Il appartient à la plateforme : le
+# client ne fournit jamais d'identifiants de messagerie, ses alertes partent
+# vers l'adresse de son compte. Sans SMTP_HOST, le canal est simplement absent
+# et les notifications continuent de partir sur Telegram.
+SMTP_HOST     = os.getenv("SMTP_HOST", "")
+SMTP_PORT     = os.getenv("SMTP_PORT", "587")
+SMTP_USER     = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM     = os.getenv("SMTP_FROM", "")   # à défaut, SMTP_USER fait l'expéditeur

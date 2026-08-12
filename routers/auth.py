@@ -35,6 +35,10 @@ class ChangePasswordBody(BaseModel):
     new_password:     str = _MDP
 
 
+class PreferencesBody(BaseModel):
+    alertes_email: bool
+
+
 def _token_response(user: models.User) -> dict:
     token = auth_utils.create_token({
         "sub":  str(user.id),
@@ -93,12 +97,27 @@ def register(body: RegisterBody, db: Session = Depends(get_db)):
 @router.get("/me")
 def get_me(current_user: models.User = Depends(auth_utils.get_current_user)):
     return {
-        "id":         current_user.id,
-        "email":      current_user.email,
-        "name":       current_user.name,
-        "role":       current_user.role,
-        "created_at": current_user.created_at,
+        "id":            current_user.id,
+        "email":         current_user.email,
+        "name":          current_user.name,
+        "role":          current_user.role,
+        "created_at":    current_user.created_at,
+        "alertes_email": current_user.alertes_email,
     }
+
+
+@router.put("/me/preferences")
+def update_preferences(
+    body:         PreferencesBody,
+    current_user: models.User  = Depends(auth_utils.get_current_user),
+    db:           Session      = Depends(get_db),
+):
+    """Les alertes partent vers l'adresse du compte, jamais vers une adresse
+    saisie librement : il n'y a donc rien à vérifier ici, et la plateforme ne
+    peut pas servir à envoyer du courrier à un tiers."""
+    current_user.alertes_email = body.alertes_email
+    db.commit()
+    return {"alertes_email": current_user.alertes_email}
 
 
 @router.put("/me/password")

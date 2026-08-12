@@ -35,6 +35,20 @@ def ajouter_scan_id() -> bool:
     return True
 
 
+def ajouter_alertes_email() -> bool:
+    """Préférence d'alerte par e-mail, active pour les comptes déjà en base."""
+    if "alertes_email" in _colonnes("users"):
+        print("  [=] users.alertes_email déjà présente")
+        return False
+    with engine.begin() as cx:
+        cx.execute(text(
+            "ALTER TABLE users "
+            "ADD COLUMN alertes_email BOOLEAN NOT NULL DEFAULT TRUE"
+        ))
+    print("  [+] users.alertes_email ajoutée")
+    return True
+
+
 def rattacher_conversations() -> int:
     """Renseigne scan_id pour les conversations créées avant la colonne, en
     rejouant l'ancienne règle : dernier scan du client sur la cible du sujet."""
@@ -64,5 +78,6 @@ if __name__ == "__main__":
     Base.metadata.create_all(bind=engine)
     print("  [=] tables manquantes créées le cas échéant")
     ajouter_scan_id()
+    ajouter_alertes_email()
     rattacher_conversations()
     print("\nBase à jour.")
