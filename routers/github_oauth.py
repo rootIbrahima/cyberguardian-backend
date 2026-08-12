@@ -22,6 +22,7 @@ from auth import get_current_user
 from config import (JWT_SECRET_KEY, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET,
                     PUBLIC_BASE_URL, FRONTEND_URL)
 from models import User, GitHubConnection, RepoAutorisation
+from routers.notifications import creer_notification
 from services.chiffrement import chiffrer, dechiffrer
 
 router = APIRouter(prefix="/github", tags=["github"])
@@ -168,15 +169,38 @@ def autoriser_correction(body: RepoRequest,
                  .filter(RepoAutorisation.user_id == current_user.id,
                          RepoAutorisation.repo_slug == slug).first())
     if existante:
+        reactivation = not existante.actif
         existante.actif = True
+        if reactivation:
+            _prevenir_admins(db, current_user, slug)
         db.commit()
         return {"id": existante.id, "slug": slug, "deja": True}
 
     auto = RepoAutorisation(user_id=current_user.id, repo_slug=slug, actif=True)
     db.add(auto)
+    _prevenir_admins(db, current_user, slug)
     db.commit()
     db.refresh(auto)
     return {"id": auto.id, "slug": slug}
+
+
+def _prevenir_admins(db: Session, client: User, slug: str) -> None:
+    """Signale aux administrateurs qu'un dépôt attend une proposition de
+    correctif.
+
+    L'autorisation est une demande : elle place le dépôt dans les candidats à
+    la remédiation, mais rien ne partait vers ceux qui peuvent y donner suite.
+    Il fallait penser à consulter la page d'administration, et une demande
+    pouvait donc y dormir indéfiniment."""
+    for admin in db.query(User).filter(User.role == "admin").all():
+        creer_notification(
+            db, admin.id, "remediation",
+            title   = f"Correction autorisée : {slug}",
+            body    = f"{client.name} attend une proposition de correctif",
+            link    = "/remediation",
+            externe = f"{client.name} ({client.email}) autorise la correction du dépôt "
+                      f"{slug}.\n\nProposez le correctif depuis la page Remédiation.",
+        )
 
 
 # ── 5. Révoquer une autorisation / se déconnecter ─────────────────────────────
