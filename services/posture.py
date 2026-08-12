@@ -50,8 +50,16 @@ def posture_comptes(db: Session) -> list[dict]:
     requête par compte puis par actif produirait la cascade que nous avons déjà
     éliminée sur les conversations. Le volume s'y prête, l'historique complet
     tenant très largement en mémoire."""
+    # Seuls les clients figurent ici : la vue répond à une question de
+    # prestataire, et un expert qui analyse ses propres actifs pour s'entraîner
+    # n'est pas un compte à suivre commercialement. Son historique reste
+    # consultable dans la liste des scans.
+    clients = {u.id for u in db.query(User).filter(User.role == "client").all()}
+    if not clients:
+        return []
+
     scans = (db.query(Scan)
-             .filter(Scan.status == "completed", Scan.user_id.isnot(None))
+             .filter(Scan.status == "completed", Scan.user_id.in_(clients))
              .order_by(Scan.id)
              .all())
     if not scans:
