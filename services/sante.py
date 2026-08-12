@@ -24,6 +24,7 @@ attendre la page une quinzaine de secondes.
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 
 import httpx
 from sqlalchemy import func
@@ -33,8 +34,8 @@ from config import (ABUSEIPDB_API_KEY, FRONTEND_URL, OLLAMA_KEY, OLLAMA_MODEL,
                     OLLAMA_URL, PUBLIC_BASE_URL, SMTP_HOST, SMTP_PASSWORD,
                     SMTP_USER, TELEGRAM_BOT_TOKEN, TELEGRAM_BOT_USERNAME,
                     VIRUSTOTAL_API_KEY, incoherences)
-from horodatage import ecoule_depuis
-from models import Scan
+from horodatage import ecoule_depuis, maintenant
+from models import Notification, Scan
 
 # Au-delà, un scan « en cours » ne l'est plus : le processus qui le portait a
 # disparu et le client reste devant une page de progression qui tourne à vide.
@@ -178,6 +179,37 @@ def _configuration() -> dict:
                  f"Backend {PUBLIC_BASE_URL or '—'} · site {FRONTEND_URL}")
 
 
+def _remises(db: Session) -> dict:
+    """Notifications dont l'envoi externe a échoué sur les sept derniers jours.
+
+    Un Telegram délié, un SMTP en refus ou une adresse devenue invalide
+    laissaient jusqu'ici un client sans ses alertes, sans que la plateforme en
+    sache rien. Les notifications antérieures au suivi ont un état nul et sont
+    donc ignorées : leur sort n'a pas été enregistré."""
+    depuis = (maintenant() - timedelta(days=7)).isoformat(timespec="seconds")
+    recentes = (db.query(Notification)
+                .filter(Notification.created_at >= depuis,
+                        Notification.remise_etat.isnot(None)))
+
+    echecs = recentes.filter(Notification.remise_etat == "echec").all()
+    total  = recentes.count()
+
+    if not total:
+        return _bloc("remises", "Remise des notifications", "absent",
+                     "Aucun envoi tracé depuis sept jours")
+    if not echecs:
+        return _bloc("remises", "Remise des notifications", "ok",
+                     f"{total} envoi(s) sur sept jours, aucun échec")
+
+    destinataires = {e.user_id for e in echecs}
+    motifs = {e.remise_erreur for e in echecs if e.remise_erreur}
+    detail = (f"{len(echecs)} envoi(s) en échec sur {total}, "
+              f"{len(destinataires)} destinataire(s) concerné(s)")
+    if motifs:
+        detail += f" · {sorted(motifs)[0]}"
+    return _bloc("remises", "Remise des notifications", "alerte", detail)
+
+
 def _scans(db: Session) -> dict:
     """Un scan en échec ou figé n'est signalé nulle part : le client reste
     devant une page de progression, et personne côté plateforme ne l'apprend."""
@@ -213,7 +245,8 @@ def etat_complet(db: Session) -> dict:
         reseau = [f.result() for f in
                   [pool.submit(_telegram), pool.submit(_modele), pool.submit(_url_publique)]]
 
-    controles = reseau + [_email(), _reputation(), _configuration(), _scans(db)]
+    controles = reseau + [_email(), _reputation(), _configuration(),
+                          _remises(db), _scans(db)]
     ordre = {"alerte": 0, "absent": 1, "ok": 2}
     controles.sort(key=lambda c: ordre[c["etat"]])
 

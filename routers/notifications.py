@@ -37,12 +37,16 @@ def creer_notification(db: Session, user_id: int, type: str, title: str,
         created_at = _now_iso(),
     )
     db.add(notif)
+    # L'identifiant est nécessaire au fil d'envoi pour y inscrire le verdict de
+    # la remise. Le flush l'attribue sans clore la transaction : un rollback de
+    # l'appelant annulerait la notification comme le reste.
+    db.flush()
 
     # Le même événement part sur les canaux externes du destinataire : Telegram
-    # s'il a lié son compte, plus tout canal déclaré dans APPRISE_URLS. Le
-    # paramètre « externe » permet un texte plus complet là-bas qu'à l'écran,
-    # où la place est comptée.
-    notifier_apres_commit(db, user_id, title, externe or body or title)
+    # s'il a lié son compte, l'e-mail de son compte, plus tout canal déclaré
+    # dans APPRISE_URLS. Le paramètre « externe » permet un texte plus complet
+    # là-bas qu'à l'écran, où la place est comptée.
+    notifier_apres_commit(db, user_id, title, externe or body or title, notif.id)
     return notif
 
 

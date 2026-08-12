@@ -49,6 +49,24 @@ def ajouter_alertes_email() -> bool:
     return True
 
 
+def ajouter_suivi_remise() -> bool:
+    """Traçabilité de la remise des notifications sur les canaux externes.
+
+    Les colonnes restent nulles pour les notifications antérieures : leur sort
+    n'a pas été enregistré et l'inventer serait pire que l'ignorer."""
+    colonnes = _colonnes("notifications")
+    manquantes = [c for c in ("remise_etat", "remise_le", "remise_erreur")
+                  if c not in colonnes]
+    if not manquantes:
+        print("  [=] notifications.remise_* déjà présentes")
+        return False
+    with engine.begin() as cx:
+        for colonne in manquantes:
+            cx.execute(text(f"ALTER TABLE notifications ADD COLUMN {colonne} VARCHAR"))
+    print(f"  [+] notifications : {', '.join(manquantes)} ajoutée(s)")
+    return True
+
+
 def rattacher_conversations() -> int:
     """Renseigne scan_id pour les conversations créées avant la colonne, en
     rejouant l'ancienne règle : dernier scan du client sur la cible du sujet."""
@@ -79,5 +97,6 @@ if __name__ == "__main__":
     print("  [=] tables manquantes créées le cas échéant")
     ajouter_scan_id()
     ajouter_alertes_email()
+    ajouter_suivi_remise()
     rattacher_conversations()
     print("\nBase à jour.")

@@ -183,6 +183,14 @@ class Notification(Base):
     read_at    = Column(String, nullable=True)      # ISO, NULL = non lue
     created_at = Column(String)                     # ISO
 
+    # Suivi de la remise sur les canaux externes. L'envoi était jusqu'ici sans
+    # trace : une exception était écrite dans la sortie du serveur et oubliée,
+    # si bien qu'un Telegram délié ou un SMTP en refus ne se voyait nulle part.
+    # NULL tant que le fil d'envoi n'a pas rendu son verdict.
+    remise_etat   = Column(String, nullable=True)   # ok | echec | sans_canal
+    remise_le     = Column(String, nullable=True)   # ISO
+    remise_erreur = Column(String, nullable=True)
+
     user = relationship("User")
 
     def to_dict(self) -> dict:

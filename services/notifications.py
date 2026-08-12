@@ -21,7 +21,8 @@ from sqlalchemy.orm import Session
 from config import (APPRISE_URLS, SMTP_FROM, SMTP_HOST, SMTP_PASSWORD,
                     SMTP_PORT, SMTP_USER, TELEGRAM_BOT_TOKEN)
 from database import SessionLocal
-from models import User
+from horodatage import maintenant_iso
+from models import Notification, User
 from services.telegram_liaison import get_chat_id_par_user
 
 
@@ -59,10 +60,14 @@ def _en_html(texte: str) -> str:
     return escape(texte).replace("\n", "<br/>\n")
 
 
-def notifier_utilisateur(user_id: int, titre: str, message: str, db: Session) -> bool:
+def notifier_utilisateur(user_id: int, titre: str, message: str, db: Session) -> str:
     """Pousse une notification à un utilisateur sur tous ses canaux disponibles.
-    Renvoie False si aucun canal n'est joignable, l'appelant ne doit jamais
-    bloquer sur ce retour (la notification est un à-côté, pas le résultat métier)."""
+
+    Rend l'état de la remise plutôt qu'un booléen : « personne à joindre » et
+    « l'envoi a échoué » demandent des réponses opposées, et les confondre
+    ferait passer pour une panne un client qui n'a simplement lié aucun canal.
+    L'appelant ne doit jamais bloquer sur ce retour, la notification est un
+    à-côté et non le résultat métier."""
     apobj = apprise.Apprise()
 
     chat_id = get_chat_id_par_user(user_id, db)
@@ -79,25 +84,47 @@ def notifier_utilisateur(user_id: int, titre: str, message: str, db: Session) ->
         apobj.add(url)
 
     if len(apobj) == 0:
-        return False
+        return "sans_canal"
 
-    return apobj.notify(body=_en_html(message), title=titre,
-                        body_format=NotifyFormat.HTML)
+    remis = apobj.notify(body=_en_html(message), title=titre,
+                         body_format=NotifyFormat.HTML)
+    return "ok" if remis else "echec"
 
 
-def _pousser(user_id: int, titre: str, message: str) -> None:
+def _tracer(db: Session, notif_id: int | None, etat: str, erreur: str | None = None) -> None:
+    """Inscrit le verdict de la remise sur la notification concernée."""
+    if not notif_id:
+        return
+    notif = db.query(Notification).filter(Notification.id == notif_id).first()
+    if not notif:
+        return          # supprimée entre-temps
+    notif.remise_etat   = etat
+    notif.remise_le     = maintenant_iso()
+    notif.remise_erreur = (erreur or "")[:500] or None
+    db.commit()
+
+
+def _pousser(user_id: int, titre: str, message: str, notif_id: int | None) -> None:
     """Envoi effectif, hors du fil de la requête, avec sa propre session : celle
     de la requête est refermée avant que ce fil ne s'exécute."""
     db = SessionLocal()
     try:
-        notifier_utilisateur(user_id, titre, message, db)
+        _tracer(db, notif_id, notifier_utilisateur(user_id, titre, message, db))
     except Exception as e:
+        # L'échec était jusqu'ici écrit dans la sortie du serveur puis oublié.
+        # Il reste maintenant attaché à la notification, donc consultable.
         print(f"  [!] notification externe non remise à l'utilisateur {user_id} : {e}")
+        try:
+            db.rollback()
+            _tracer(db, notif_id, "echec", f"{type(e).__name__} : {e}")
+        except Exception:
+            pass
     finally:
         db.close()
 
 
-def notifier_apres_commit(db: Session, user_id: int, titre: str, message: str) -> None:
+def notifier_apres_commit(db: Session, user_id: int, titre: str, message: str,
+                          notif_id: int | None = None) -> None:
     """Programme l'envoi externe pour l'instant où la transaction sera validée.
 
     Envoyer immédiatement préviendrait d'un événement encore susceptible d'être
@@ -105,6 +132,7 @@ def notifier_apres_commit(db: Session, user_id: int, titre: str, message: str) -
     temps d'un aller-retour Telegram ou SMTP, alors qu'une notification est un
     à-côté : elle ne doit jamais peser sur la réponse rendue à l'utilisateur."""
     def au_commit(_session):
-        threading.Thread(target=_pousser, args=(user_id, titre, message), daemon=True).start()
+        threading.Thread(target=_pousser, args=(user_id, titre, message, notif_id),
+                         daemon=True).start()
 
     event.listen(db, "after_commit", au_commit, once=True)
