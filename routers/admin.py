@@ -13,6 +13,7 @@ from database import get_db
 from models import Conversation, ExpertProfile, RepoAutorisation, Scan, User
 from auth import get_current_user
 from services.remediation import proposer_correction
+from services.posture import posture_comptes
 from services.sante import etat_complet
 from routers.github_oauth import _repo_slug
 from routers.notifications import creer_notification
@@ -227,6 +228,17 @@ def toggle_user(
     user.is_active = not user.is_active
     db.commit()
     return {"id": user.id, "is_active": bool(user.is_active)}
+
+
+@router.get("/posture")
+def posture(
+    db: Session = Depends(get_db),
+    _:  User    = Depends(require_admin),
+):
+    """Posture de sécurité par compte : actifs surveillés, score moyen ramené
+    sur cent, tendance depuis le scan précédent, vulnérabilités graves et
+    ancienneté de la dernière analyse."""
+    return posture_comptes(db)
 
 
 @router.get("/sante")
