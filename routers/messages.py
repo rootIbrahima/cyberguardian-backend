@@ -76,7 +76,8 @@ def _conv_to_dict(conv: Conversation, viewer: User) -> dict:
 
     last_read = conv.client_last_read if is_client else conv.expert_last_read
     last_msg  = conv.messages[-1] if conv.messages else None
-    if viewer.id not in (conv.client_id, conv.expert_id):
+    participant = viewer.id in (conv.client_id, conv.expert_id)
+    if not participant:
         unread = 0   # superviseur (admin) : pas de notion de non-lu
     else:
         unread = sum(
@@ -100,7 +101,25 @@ def _conv_to_dict(conv: Conversation, viewer: User) -> dict:
         "rating":       conv.rating,
         "unread":       unread,
         "last":         _humanize(last_msg.created_at if last_msg else conv.created_at),
-        "preview":      (last_msg.text[:60] if last_msg else "Nouvelle conversation"),
+        # L'aperçu est du contenu : soixante caractères du dernier message
+        # suffisent à révéler un port ouvert ou un nom de fichier compromis.
+        # Un superviseur reçoit à la place le volume de l'échange, qui est ce
+        # dont il a besoin pour juger de son activité.
+        "preview":      ((last_msg.text[:60] if last_msg else "Nouvelle conversation")
+                         if participant
+                         else f"{len(conv.messages)} message(s) échangé(s)"),
+        "supervision":  not participant,
+        # Le format d'origine n'affiche qu'un interlocuteur, celui d'en face,
+        # puisqu'un participant se connaît lui-même. Superviser suppose au
+        # contraire de voir les deux parties, et le volume de l'échange.
+        "parties": None if participant else {
+            "client":   {"id": conv.client.id, "nom": conv.client.name,
+                         "email": conv.client.email},
+            "expert":   {"id": conv.expert.id, "nom": conv.expert.name,
+                         "email": conv.expert.email},
+            "messages": len(conv.messages),
+            "ouverte":  conv.created_at,
+        },
     }
 
 
@@ -170,6 +189,20 @@ def _get_conv_or_404(conv_id: int, db: Session, user: User) -> Conversation:
     if user.role != "admin" and user.id not in (conv.client_id, conv.expert_id):
         raise HTTPException(status_code=403, detail="Accès refusé")
     return conv
+
+
+def _exiger_participant(conv: Conversation, user: User, quoi: str) -> None:
+    """Réserve aux deux interlocuteurs tout ce qui touche au contenu échangé.
+
+    L'administration voit la conversation — qui parle à qui, sur quel actif, à
+    quel niveau de mission, depuis quand, combien de messages — mais pas ce qui
+    s'y dit. Les échanges portent les rapports de vulnérabilités des actifs du
+    client : ports ouverts, secrets exposés, chemins de fichiers. Un compte
+    capable de tout lire sans laisser de trace concentre précisément ce qu'un
+    attaquant cherche, pour un besoin d'exploitation que les métadonnées
+    couvrent déjà."""
+    if user.id not in (conv.client_id, conv.expert_id):
+        raise HTTPException(status_code=403, detail=quoi)
 
 
 def mission_active(conv: Conversation) -> bool:
@@ -368,6 +401,8 @@ def list_messages(
     """Fil complet, ou seulement les messages postérieurs à « apres » (id du
     dernier message déjà affiché) pour les rafraîchissements périodiques."""
     conv = _get_conv_or_404(conv_id, db, current_user)
+    _exiger_participant(conv, current_user,
+                        "Le contenu des échanges est réservé aux deux interlocuteurs.")
     msgs = conv.messages
     if apres is not None:
         msgs = [m for m in msgs if m.id > apres]
@@ -391,9 +426,7 @@ def send_message(
     current_user: User    = Depends(get_current_user),
 ):
     conv = _get_conv_or_404(conv_id, db, current_user)
-    # L'admin supervise en lecture seule, seuls les participants écrivent
-    if current_user.id not in (conv.client_id, conv.expert_id):
-        raise HTTPException(status_code=403, detail="Seuls les participants peuvent écrire")
+    _exiger_participant(conv, current_user, "Seuls les interlocuteurs peuvent écrire.")
     text = body.text.strip()
     if not text:
         raise HTTPException(status_code=422, detail="Message vide")
@@ -422,8 +455,7 @@ def send_attachment(
     """Envoi d'une pièce jointe, avec un commentaire facultatif. Une capture ou
     un extrait de journal valent souvent mieux qu'une description."""
     conv = _get_conv_or_404(conv_id, db, current_user)
-    if current_user.id not in (conv.client_id, conv.expert_id):
-        raise HTTPException(status_code=403, detail="Seuls les participants peuvent écrire")
+    _exiger_participant(conv, current_user, "Seuls les interlocuteurs peuvent écrire.")
 
     contenu, type_mime, suffixe = _enregistrer_piece(fichier)
     legende = (text or "").strip()[:4000]
@@ -463,8 +495,10 @@ def download_attachment(
     db:           Session = Depends(get_db),
     current_user: User    = Depends(get_current_user),
 ):
-    """Téléchargement d'une pièce jointe, réservé aux participants et à l'admin."""
+    """Téléchargement d'une pièce jointe, réservé aux deux interlocuteurs."""
     conv  = _get_conv_or_404(conv_id, db, current_user)
+    _exiger_participant(conv, current_user,
+                        "Les pièces jointes sont réservées aux deux interlocuteurs.")
     piece = (
         db.query(MessageAttachment)
         .join(Message, Message.id == MessageAttachment.message_id)
