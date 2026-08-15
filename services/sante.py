@@ -195,8 +195,12 @@ def _remises(db: Session) -> dict:
     total  = recentes.count()
 
     if not total:
-        return _bloc("remises", "Remise des notifications", "absent",
-                     "Aucun envoi tracé depuis sept jours")
+        # Pas d'envoi n'est pas un défaut de configuration : les canaux peuvent
+        # être en parfait état sans qu'aucun événement ne se soit produit.
+        # Classer ce cas en « absent » faisait annoncer « 1 non configuré » à
+        # une plateforme dont tous les canaux fonctionnaient.
+        return _bloc("remises", "Remise des notifications", "ok",
+                     "Aucun envoi à signaler sur les sept derniers jours")
     if not echecs:
         return _bloc("remises", "Remise des notifications", "ok",
                      f"{total} envoi(s) sur sept jours, aucun échec")
