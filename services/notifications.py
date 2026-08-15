@@ -60,35 +60,54 @@ def _en_html(texte: str) -> str:
     return escape(texte).replace("\n", "<br/>\n")
 
 
-def notifier_utilisateur(user_id: int, titre: str, message: str, db: Session) -> str:
+def notifier_utilisateur(user_id: int, titre: str, message: str,
+                         db: Session) -> tuple[str, str | None]:
     """Pousse une notification à un utilisateur sur tous ses canaux disponibles.
 
-    Rend l'état de la remise plutôt qu'un booléen : « personne à joindre » et
-    « l'envoi a échoué » demandent des réponses opposées, et les confondre
-    ferait passer pour une panne un client qui n'a simplement lié aucun canal.
+    Rend l'état de la remise et, le cas échéant, le canal fautif — plutôt qu'un
+    booléen. « Personne à joindre », « rien n'est passé » et « un canal sur deux
+    a échoué » demandent trois réponses différentes, et les confondre ferait
+    passer pour une panne un client qui n'a simplement lié aucun canal, ou
+    laisserait un canal cassé invisible parce qu'un autre a pris le relais.
+
     L'appelant ne doit jamais bloquer sur ce retour, la notification est un
     à-côté et non le résultat métier."""
-    apobj = apprise.Apprise()
+    canaux: list[tuple[str, str]] = []
 
     chat_id = get_chat_id_par_user(user_id, db)
     if chat_id and TELEGRAM_BOT_TOKEN:
-        apobj.add(f"tgram://{TELEGRAM_BOT_TOKEN}/{chat_id}")
+        canaux.append(("Telegram", f"tgram://{TELEGRAM_BOT_TOKEN}/{chat_id}"))
 
     utilisateur = db.query(User).filter(User.id == user_id).first()
     if utilisateur and utilisateur.alertes_email:
         url = _url_email(utilisateur.email)
         if url:
-            apobj.add(url)
+            canaux.append(("e-mail", url))
 
-    for url in _canaux_statiques():
-        apobj.add(url)
+    for i, url in enumerate(_canaux_statiques(), 1):
+        canaux.append((f"canal d'exploitation {i}", url))
 
-    if len(apobj) == 0:
-        return "sans_canal"
+    if not canaux:
+        return "sans_canal", None
 
-    remis = apobj.notify(body=_en_html(message), title=titre,
-                         body_format=NotifyFormat.HTML)
-    return "ok" if remis else "echec"
+    # Chaque canal est notifié séparément. Apprise ne rend qu'un booléen pour
+    # l'ensemble : un envoi en échec ne disait donc pas lequel avait échoué, et
+    # l'exploitant voyait un compteur sur lequel il ne pouvait pas agir.
+    corps = _en_html(message)
+    echecs = []
+    for nom, url in canaux:
+        canal = apprise.Apprise()
+        canal.add(url)
+        if not canal.notify(body=corps, title=titre, body_format=NotifyFormat.HTML):
+            echecs.append(nom)
+
+    if not echecs:
+        return "ok", None
+    if len(echecs) == len(canaux):
+        return "echec", f"aucun canal joignable ({', '.join(echecs)})"
+    # Le destinataire a bien reçu l'alerte : ce n'est pas un échec de remise.
+    # Le canal fautif est consigné malgré tout, il demande une correction.
+    return "ok", f"{', '.join(echecs)} en échec, message remis par les autres canaux"
 
 
 def _tracer(db: Session, notif_id: int | None, etat: str, erreur: str | None = None) -> None:
@@ -109,7 +128,7 @@ def _pousser(user_id: int, titre: str, message: str, notif_id: int | None) -> No
     de la requête est refermée avant que ce fil ne s'exécute."""
     db = SessionLocal()
     try:
-        _tracer(db, notif_id, notifier_utilisateur(user_id, titre, message, db))
+        _tracer(db, notif_id, *notifier_utilisateur(user_id, titre, message, db))
     except Exception as e:
         # L'échec était jusqu'ici écrit dans la sortie du serveur puis oublié.
         # Il reste maintenant attaché à la notification, donc consultable.

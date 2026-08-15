@@ -193,6 +193,12 @@ def _remises(db: Session) -> dict:
 
     echecs = recentes.filter(Notification.remise_etat == "echec").all()
     total  = recentes.count()
+    # Un canal peut échouer sans que le destinataire soit privé de l'alerte, un
+    # autre ayant pris le relais. La remise est alors réussie, mais le canal
+    # fautif demande tout de même une correction : le taire le rendrait
+    # définitivement invisible.
+    boiteux = (recentes.filter(Notification.remise_etat == "ok",
+                               Notification.remise_erreur.isnot(None)).all())
 
     if not total:
         # Pas d'envoi n'est pas un défaut de configuration : les canaux peuvent
@@ -201,16 +207,24 @@ def _remises(db: Session) -> dict:
         # une plateforme dont tous les canaux fonctionnaient.
         return _bloc("remises", "Remise des notifications", "ok",
                      "Aucun envoi à signaler sur les sept derniers jours")
-    if not echecs:
+    if not echecs and not boiteux:
         return _bloc("remises", "Remise des notifications", "ok",
                      f"{total} envoi(s) sur sept jours, aucun échec")
 
+    if not echecs:
+        motifs = sorted({b.remise_erreur for b in boiteux if b.remise_erreur})
+        return _bloc("remises", "Remise des notifications", "alerte",
+                     f"{len(boiteux)} envoi(s) sur {total} avec un canal en défaut, "
+                     f"le destinataire a néanmoins été prévenu · "
+                     f"{motifs[0] if motifs else 'motif non consigné'}")
+
     destinataires = {e.user_id for e in echecs}
-    motifs = {e.remise_erreur for e in echecs if e.remise_erreur}
-    detail = (f"{len(echecs)} envoi(s) en échec sur {total}, "
-              f"{len(destinataires)} destinataire(s) concerné(s)")
-    if motifs:
-        detail += f" · {sorted(motifs)[0]}"
+    motifs = sorted({e.remise_erreur for e in echecs if e.remise_erreur})
+    detail = (f"{len(echecs)} envoi(s) sans aucune remise sur {total}, "
+              f"{len(destinataires)} destinataire(s) n'ont rien reçu")
+    detail += f" · {motifs[0]}" if motifs else " · motif non consigné"
+    if boiteux:
+        detail += f" · {len(boiteux)} autre(s) envoi(s) avec un canal en défaut"
     return _bloc("remises", "Remise des notifications", "alerte", detail)
 
 
