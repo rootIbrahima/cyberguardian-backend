@@ -154,8 +154,14 @@ def launch_scan(
     return scan.to_dict()
 
 
-def _executer_scan(scan_id: int, target: str, asset_type: str) -> None:
+def _executer_scan(scan_id: int, target: str, asset_type: str,
+                   redaction: bool = True) -> None:
     """Exécute les outils et complète le scan déjà créé.
+
+    « redaction » est mis à False pour les passages de surveillance : personne
+    ne lit un rapport rédigé à trois heures du matin, et le modèle tourne sur
+    un serveur mutualisé qu'il est inutile de solliciter vingt fois la nuit. Le
+    texte reste produit à la demande, au premier téléchargement du PDF.
 
     Tourne après l'envoi de la réponse : la session de la requête est fermée,
     il en faut une dédiée. Toute erreur laisse le scan en « failed » plutôt
@@ -293,12 +299,50 @@ def _executer_scan(scan_id: int, target: str, asset_type: str) -> None:
         # marqué terminé : le client consulte ses résultats pendant ce temps et
         # ne subit plus les 30 à 140 s du modèle au moment où il demande le PDF.
         # L'échec est sans conséquence, le téléchargement le régénérera.
-        redaction = _generate_simple_explanation(scan.to_dict())
         if redaction:
-            scan.results = {**(scan.results or {}), "rapport_ia": redaction}
-            db.commit()
+            texte = _generate_simple_explanation(scan.to_dict())
+            if texte:
+                scan.results = {**(scan.results or {}), "rapport_ia": texte}
+                db.commit()
     finally:
         db.close()
+
+
+def creer_et_executer(user_id: int, target: str, asset_type: str,
+                      redaction: bool = True) -> int | None:
+    """Crée un scan puis l'exécute de bout en bout, hors du contexte d'une
+    requête. Utilisé par la surveillance planifiée, qui n'a ni client à faire
+    patienter ni tâche de fond FastAPI à sa disposition.
+
+    Le quota journalier ne s'applique pas : il protège la plateforme d'un compte
+    qui l'utiliserait comme relais de reconnaissance, pas d'elle-même."""
+    type_labels = {"domain": "Domaine", "ip": "IP", "url": "URL", "github": "GitHub"}
+    db = SessionLocal()
+    try:
+        scan = Scan(
+            user_id    = user_id,
+            target     = target,
+            type       = asset_type,
+            type_label = type_labels.get(asset_type, "Domaine"),
+            score      = None,
+            status     = "running",
+            vulns      = 0,
+            cve        = 0,
+            date       = _now(),
+            created_at = maintenant_iso(),
+            results    = {},
+            issues     = [],
+            conversations = [],
+        )
+        db.add(scan)
+        db.commit()
+        db.refresh(scan)
+        scan_id = scan.id
+    finally:
+        db.close()
+
+    _executer_scan(scan_id, target, asset_type, redaction=redaction)
+    return scan_id
 
 
 def _alerter_sur_evolution(db: Session, scan: Scan) -> None:

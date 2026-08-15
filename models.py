@@ -272,3 +272,42 @@ class RepoAutorisation(Base):
     autorise_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User")
+
+
+class SurveillanceCible(Base):
+    """Actif qu'un client demande à faire réanalyser périodiquement.
+
+    C'est ce qui sépare un scanner d'une plateforme de surveillance : sans
+    passage régulier, un port qui s'ouvre ou un certificat qui approche de son
+    terme n'est découvert qu'au prochain scan manuel, c'est-à-dire souvent
+    jamais. L'alerte, elle, n'a rien à réinventer : le scan planifié emprunte le
+    même chemin que le scan manuel et déclenche la même comparaison."""
+    __tablename__ = "surveillances"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    target     = Column(String, nullable=False)
+    asset_type = Column(String, nullable=False)          # domain | ip | url | github
+    frequence  = Column(String, default="hebdomadaire")  # quotidienne | hebdomadaire
+    actif      = Column(Boolean, default=True, nullable=False)
+    cree_le    = Column(String)                          # ISO
+    # Date du prochain passage, en ISO. C'est elle que le planificateur
+    # interroge : conserver la date du dernier passage obligerait à recalculer
+    # l'échéance à chaque tour, et à la recalculer partout de la même façon.
+    prochain_passage = Column(String, index=True)
+    dernier_passage  = Column(String)
+    dernier_scan_id  = Column(Integer, ForeignKey("scans.id"))
+
+    user = relationship("User")
+
+    def to_dict(self) -> dict:
+        return {
+            "id":               self.id,
+            "target":           self.target,
+            "asset_type":       self.asset_type,
+            "frequence":        self.frequence,
+            "actif":            self.actif,
+            "prochain_passage": self.prochain_passage,
+            "dernier_passage":  self.dernier_passage,
+            "dernier_scan_id":  self.dernier_scan_id,
+        }
