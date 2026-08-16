@@ -198,8 +198,17 @@ def _remises(db: Session) -> dict:
                 .filter(Notification.created_at >= depuis,
                         Notification.remise_etat.isnot(None)))
 
-    echecs = recentes.filter(Notification.remise_etat == "echec").all()
-    total  = recentes.count()
+    # Seuls les échecs dont la cause a été enregistrée sont retenus. Les autres
+    # datent d'avant le suivi canal par canal, où un envoi était marqué en échec
+    # dès qu'un seul canal échouait, même si un autre avait remis le message :
+    # ils ne permettent pas de dire si le destinataire a été privé de son
+    # alerte. Alerter dessus ferait chercher une panne qui n'existe peut-être
+    # pas, et c'est exactement ce qui vient de se produire.
+    echecs = recentes.filter(Notification.remise_etat == "echec",
+                             Notification.remise_erreur.isnot(None)).all()
+    indetermines = recentes.filter(Notification.remise_etat == "echec",
+                                   Notification.remise_erreur.is_(None)).count()
+    total = recentes.count()
     # Un canal peut échouer sans que le destinataire soit privé de l'alerte, un
     # autre ayant pris le relais. La remise est alors réussie, mais le canal
     # fautif demande tout de même une correction : le taire le rendrait
@@ -215,8 +224,16 @@ def _remises(db: Session) -> dict:
         return _bloc("remises", "Remise des notifications", "ok",
                      "Aucun envoi à signaler sur les sept derniers jours")
     if not echecs and not boiteux:
-        return _bloc("remises", "Remise des notifications", "ok",
-                     f"{_pluriel(total, 'envoi', 'envois')} sur sept jours, aucun échec")
+        detail = f"{_pluriel(total, 'envoi', 'envois')} sur sept jours, aucun échec"
+        if indetermines:
+            # Mentionné sans alerter : l'information existe, elle ne conclut rien.
+            reste = _pluriel(
+                indetermines,
+                "envoi plus ancien reste indéterminé, sa cause n'ayant pas été enregistrée",
+                "envois plus anciens restent indéterminés, leur cause n'ayant pas été enregistrée",
+            )
+            detail += f" — {reste}"
+        return _bloc("remises", "Remise des notifications", "ok", detail)
 
     if not echecs:
         motifs = sorted({b.remise_erreur for b in boiteux if b.remise_erreur})
@@ -236,16 +253,7 @@ def _remises(db: Session) -> dict:
                         "client est resté sans son information",
                         "clients sont restés sans leur information")
     detail = f"{manquees} atteint personne sur {total} : {prives}"
-    if motifs:
-        detail += f". Cause : {motifs[0]}"
-    else:
-        # Sans motif, l'enregistrement est antérieur au suivi canal par canal.
-        # L'ancienne version marquait l'envoi en échec dès qu'un seul canal
-        # échouait, même si un autre avait remis le message : affirmer que le
-        # destinataire n'a rien reçu serait donc peut-être faux. On le dit.
-        detail = (f"{manquees} été remise sur {total}. Enregistrement antérieur au "
-                  f"suivi canal par canal : un seul canal a pu échouer sans priver "
-                  f"le destinataire, l'ancienne version ne les distinguait pas")
+    detail += f". Cause : {motifs[0]}"
     if boiteux:
         detail += (f". Par ailleurs, {_pluriel(len(boiteux), 'envoi a', 'envois ont')} "
                    f"emprunté un canal en panne sans conséquence pour le destinataire")
