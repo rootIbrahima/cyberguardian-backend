@@ -58,14 +58,40 @@ def _detect_language_from_files(tmpdir: str) -> str:
     return ""
 
 
+# Emplacements usuels des binaires système, consultés lorsque le PATH ne les
+# expose pas. Un service systemd dont l'unité fixe PATH au seul venv/bin ne voit
+# aucune commande du système : le clonage échouait alors avec « git n'est pas
+# installé », sur une machine où il l'était parfaitement. Le diagnostic était
+# introuvable depuis l'interface, qui se contentait d'annoncer « langage non
+# détecté ».
+_CHEMINS_SYSTEME = ("/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sbin")
+
+
+def _binaire(nom: str) -> str | None:
+    """Chemin absolu d'une commande système, PATH incomplet ou non."""
+    trouve = shutil.which(nom)
+    if trouve:
+        return trouve
+    for dossier in _CHEMINS_SYSTEME:
+        candidat = Path(dossier) / nom
+        if candidat.is_file():
+            return str(candidat)
+    return None
+
+
 def _clone(owner: str, repo: str) -> tuple[str | None, str | None]:
     """Shallow-clone repo into a temp dir. Returns (tmpdir, error)."""
+    git = _binaire("git")
+    if not git:
+        return None, ("git est introuvable, y compris hors du PATH. "
+                      "Installez-le, ou vérifiez le PATH de l'unité systemd.")
+
     tmpdir = tempfile.mkdtemp(prefix="cg_gh_")
     try:
         # Arguments en liste, jamais shell=True ; le couple propriétaire/dépôt
         # a été validé par expression régulière en amont.
         r = subprocess.run(  # nosec B603,B607
-            ["git", "clone", "--depth", "1", "--quiet",
+            [git, "clone", "--depth", "1", "--quiet",
              f"https://github.com/{owner}/{repo}.git", tmpdir],
             capture_output=True, text=True, timeout=90,
         )
@@ -78,7 +104,9 @@ def _clone(owner: str, repo: str) -> tuple[str | None, str | None]:
         return None, "Timeout : dépôt trop volumineux"
     except FileNotFoundError:
         shutil.rmtree(tmpdir, ignore_errors=True)
-        return None, "git n'est pas installé sur le serveur"
+        # Le chemin a pourtant été résolu : le signaler avec, sans quoi le
+        # message accuserait une absence là où il s'agit d'autre chose.
+        return None, f"git introuvable à l'exécution ({git})"
 
 
 # ── Tool 1 : github_info ──────────────────────────────────────────────────────
@@ -361,16 +389,19 @@ def _run_trufflehog(tmpdir: str) -> dict:
 
 def _run_npm_audit(tmpdir: str) -> dict:
     """Run npm audit on an already-cloned JS/TS repository."""
+    npm = _binaire("npm")
+    if not npm:
+        return {"findings": [], "error": "npm est introuvable sur le serveur"}
     try:
         # Generate package-lock.json without downloading node_modules
         # Arguments en liste, pas de shell, cwd est un dossier temporaire maîtrisé
         subprocess.run(  # nosec B603,B607
-            ["npm", "install", "--package-lock-only", "--ignore-scripts"],
+            [npm, "install", "--package-lock-only", "--ignore-scripts"],
             cwd=tmpdir, capture_output=True, text=True, timeout=60,
         )
         # Arguments en liste, pas de shell, cwd est un dossier temporaire maîtrisé
         result = subprocess.run(  # nosec B603,B607
-            ["npm", "audit", "--json"],
+            [npm, "audit", "--json"],
             cwd=tmpdir, capture_output=True, text=True, timeout=60,
         )
         # npm audit exits non-zero when vulnerabilities found, parse stdout anyway
