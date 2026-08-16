@@ -44,6 +44,13 @@ MINUTES_SCAN_BLOQUE = 20
 _DELAI = httpx.Timeout(connect=5.0, read=12.0, write=5.0, pool=5.0)
 
 
+def _pluriel(nombre: int, singulier: str, pluriel: str) -> str:
+    """Accorde le libellé au nombre. Les formes « 1 envoi(s) » et
+    « 1 destinataire(s) concerné(s) » se lisent comme un décompte de machine et
+    font douter le lecteur de ce qu'on lui annonce."""
+    return f"{nombre} {singulier if nombre <= 1 else pluriel}"
+
+
 def _bloc(cle: str, titre: str, etat: str, detail: str, **extra) -> dict:
     return {"cle": cle, "titre": titre, "etat": etat, "detail": detail, **extra}
 
@@ -209,22 +216,39 @@ def _remises(db: Session) -> dict:
                      "Aucun envoi à signaler sur les sept derniers jours")
     if not echecs and not boiteux:
         return _bloc("remises", "Remise des notifications", "ok",
-                     f"{total} envoi(s) sur sept jours, aucun échec")
+                     f"{_pluriel(total, 'envoi', 'envois')} sur sept jours, aucun échec")
 
     if not echecs:
         motifs = sorted({b.remise_erreur for b in boiteux if b.remise_erreur})
+        detail = (f"{_pluriel(len(boiteux), 'envoi a', 'envois ont')} emprunté un canal "
+                  f"en panne sur {total}, mais le destinataire a été prévenu par un autre")
         return _bloc("remises", "Remise des notifications", "alerte",
-                     f"{len(boiteux)} envoi(s) sur {total} avec un canal en défaut, "
-                     f"le destinataire a néanmoins été prévenu · "
-                     f"{motifs[0] if motifs else 'motif non consigné'}")
+                     detail + (f" — {motifs[0]}" if motifs else ""))
 
     destinataires = {e.user_id for e in echecs}
     motifs = sorted({e.remise_erreur for e in echecs if e.remise_erreur})
-    detail = (f"{len(echecs)} envoi(s) sans aucune remise sur {total}, "
-              f"{len(destinataires)} destinataire(s) n'ont rien reçu")
-    detail += f" · {motifs[0]}" if motifs else " · motif non consigné"
+
+    # Une phrase, pas un décompte. « 1 envoi(s) en échec sur 12, 1
+    # destinataire(s) concerné(s) » énonçait des chiffres justes sans dire ce
+    # qui s'était passé ni s'il fallait agir.
+    manquees = _pluriel(len(echecs), "notification n'a", "notifications n'ont")
+    prives   = _pluriel(len(destinataires),
+                        "client est resté sans son information",
+                        "clients sont restés sans leur information")
+    detail = f"{manquees} atteint personne sur {total} : {prives}"
+    if motifs:
+        detail += f". Cause : {motifs[0]}"
+    else:
+        # Sans motif, l'enregistrement est antérieur au suivi canal par canal.
+        # L'ancienne version marquait l'envoi en échec dès qu'un seul canal
+        # échouait, même si un autre avait remis le message : affirmer que le
+        # destinataire n'a rien reçu serait donc peut-être faux. On le dit.
+        detail = (f"{manquees} été remise sur {total}. Enregistrement antérieur au "
+                  f"suivi canal par canal : un seul canal a pu échouer sans priver "
+                  f"le destinataire, l'ancienne version ne les distinguait pas")
     if boiteux:
-        detail += f" · {len(boiteux)} autre(s) envoi(s) avec un canal en défaut"
+        detail += (f". Par ailleurs, {_pluriel(len(boiteux), 'envoi a', 'envois ont')} "
+                   f"emprunté un canal en panne sans conséquence pour le destinataire")
     return _bloc("remises", "Remise des notifications", "alerte", detail)
 
 
