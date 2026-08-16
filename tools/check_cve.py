@@ -44,12 +44,15 @@ def _get_server_banner(target: str) -> str:
                 f"{scheme}://{host}",
                 timeout=5,
                 follow_redirects=True,
-                verify=False,  # nosec B501, intentional: scanner must reach hosts with invalid certs
+                # Volontaire : un analyseur doit joindre les hôtes dont le
+                # certificat est justement invalide, c'est ce qu'il vient mesurer.
+                verify=False,  # nosec B501
             )
             banner = resp.headers.get("server", "")
             if banner:
                 return banner
-        except Exception:  # nosec B112, skip scheme (https/http) on connection failure
+        # Passe au schéma suivant (https puis http) si la connexion échoue
+        except Exception:  # nosec B112
             continue
     return ""
 

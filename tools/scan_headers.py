@@ -71,7 +71,9 @@ def scan_headers(target: str, timeout: int = 10) -> HeadersResult:
                 f"{scheme}://{host}",
                 timeout=timeout,
                 follow_redirects=True,
-                verify=False,  # nosec B501, intentionnel : scanner des sites au certificat invalide
+                # Volontaire : les sites au certificat invalide sont précisément
+                # ceux que l'analyse doit atteindre pour les signaler.
+                verify=False,  # nosec B501
             )
             break
         except Exception as e:

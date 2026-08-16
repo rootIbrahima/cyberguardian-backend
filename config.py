@@ -94,8 +94,11 @@ BOT_PAR_DEFAUT = "CyberGuardianBot"
 
 def _developpement(url: str) -> bool:
     """URL d'un poste de développement : boucle locale ou tunnel temporaire."""
+    # Ces chaînes sont des motifs recherchés dans une URL de configuration, non
+    # une adresse d'écoute : le code signale une URL de développement, il n'ouvre
+    # aucun service. D'où l'exemption du contrôle B104.
     return any(marque in url for marque in
-               ("localhost", "127.0.0.1", "0.0.0.0", "ngrok", ".local"))
+               ("localhost", "127.0.0.1", "0.0.0.0", "ngrok", ".local"))  # nosec B104
 
 
 def incoherences() -> list[str]:

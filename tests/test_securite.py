@@ -35,7 +35,8 @@ from tools.target_guard import (                                            # no
     "192.168.1.1",          # réseau privé classe C
     "172.16.0.5",           # réseau privé classe B
     "169.254.169.254",      # métadonnées des hébergeurs cloud
-    "0.0.0.0",              # nosec B104, cible de test refusée, aucune écoute réseau
+    # Cible de test refusée par le garde-fou, aucune écoute réseau ouverte ici
+    "0.0.0.0",              # nosec B104
     "::1",                  # boucle locale IPv6
     "localhost",            # nom résolvant vers la boucle locale
     "http://127.0.0.1:8001",
