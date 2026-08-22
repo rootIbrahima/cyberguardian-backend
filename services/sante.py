@@ -43,6 +43,12 @@ MINUTES_SCAN_BLOQUE = 20
 
 _DELAI = httpx.Timeout(connect=5.0, read=12.0, write=5.0, pool=5.0)
 
+# Le serveur d'inférence est mutualisé et répond parfois en plusieurs secondes :
+# une réponse à /api/ps a été chronométrée à 5,4 s. Avec le délai commun, la
+# poignée de main TLS dépassait le budget et la console annonçait un serveur
+# injoignable alors qu'il répondait, seulement chargé.
+_DELAI_MODELE = httpx.Timeout(connect=15.0, read=20.0, write=5.0, pool=5.0)
+
 
 def _pluriel(nombre: int, singulier: str, pluriel: str) -> str:
     """Accorde le libellé au nombre. Les formes « 1 envoi(s) » et
@@ -105,9 +111,18 @@ def _modele() -> dict:
     try:
         reponse = httpx.get(f"{OLLAMA_URL}/api/ps",
                             headers={"Authorization": f"Bearer {OLLAMA_KEY}"},
-                            timeout=_DELAI)
+                            timeout=_DELAI_MODELE)
         reponse.raise_for_status()
         charges = [m.get("model") or m.get("name") for m in reponse.json().get("models", [])]
+    except httpx.TimeoutException:
+        # Un délai dépassé sur un serveur partagé ne prouve pas qu'il est tombé :
+        # le confondre avec une panne fait chercher une coupure réseau qui
+        # n'existe pas, et c'est exactement ce qui s'est produit.
+        return _bloc("modele", "Modèle de langage", "alerte",
+                     f"{OLLAMA_URL} n'a pas répondu en 15 s. Le serveur est "
+                     f"mutualisé : il est plus probablement saturé "
+                     f"qu'indisponible. Rapports rédigés et assistant ralentis "
+                     f"ou momentanément hors service")
     except Exception as e:
         return _bloc("modele", "Modèle de langage", "alerte",
                      f"{OLLAMA_URL} injoignable ({type(e).__name__}) : "
