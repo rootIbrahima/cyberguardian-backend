@@ -600,6 +600,7 @@ def ask_ai(
         headers_line = _headers_summary(results)
         ports_line = _ports_summary(results)
         reputation_line = _reputation_summary(results)
+        surface_line = _surface_summary(results)
         cve_critical = [c for c in cves if c.get("severity", "").upper() in ("CRITICAL", "CRITIQUE")]
         cve_high     = [c for c in cves if c.get("severity", "").upper() in ("HIGH", "HAUT")]
         cve_details  = "\n".join(
@@ -625,6 +626,7 @@ def ask_ai(
             f"{headers_line}"
             f"{ports_line}"
             f"{reputation_line}"
+            f"{surface_line}"
             f"CVE détectées ({len(cves)}) dont {len(cve_critical)} CRITIQUE et {len(cve_high)} HAUT :\n"
             f"{cve_details}\n"
             f"Problèmes détectés ({len(issues)}) : {problems}\n\n"
@@ -637,6 +639,12 @@ def ask_ai(
             "  d'entrée directe : traite-le avec le même sérieux qu'une CVE.\n"
             "- Un signalement de réputation indique un historique de compromission,\n"
             "  pas un défaut de configuration : la correction est différente.\n"
+            "- Un sous-domaine hors production exposé (dev, staging, admin) est une\n"
+            "  porte d'entrée au même titre qu'un port ouvert : il porte souvent des\n"
+            "  données réelles avec des protections moindres.\n"
+            "- Si TLS 1.0 ou 1.1 est accepté, expliquer que le serveur propose aussi\n"
+            "  des versions récentes, mais qu'un client peut choisir l'ancienne : le\n"
+            "  risque pèse sur ce client, et la correction est de les désactiver.\n"
             "- Si IP privée, explique que CyberGuardian analyse des actifs publics.\n"
             "- Pour un domaine public, recommande Let's Encrypt si besoin.\n"
             "- Adapte tes recommandations au contexte sénégalais.\n"
@@ -756,6 +764,36 @@ def _couper_a_la_phrase(texte: str) -> str:
     return texte[:fins[-1]].strip() if fins[-1] >= len(texte) * 0.75 else texte
 
 
+def _surface_summary(results: dict) -> str:
+    """Sous-domaines exposés et protocoles TLS tolérés.
+
+    Deux informations que le modèle ignorait, faute d'être dans son contexte :
+    il concluait donc à une configuration saine sur un actif dont un
+    environnement de recette était en ligne."""
+    SAUT = chr(10)
+    lignes = []
+
+    sd = results.get("subdomains") or {}
+    if sd.get("total"):
+        ligne = f"Sous-domaines exposés : {sd['total']} découverts"
+        sensibles = sd.get("sensibles") or []
+        if sensibles:
+            details = ", ".join(f"{x['hote']} ({x['motif']})" for x in sensibles[:5])
+            ligne += f", dont {len(sensibles)} hors production : {details}"
+        lignes.append(ligne + SAUT)
+
+    ssl_res = results.get("ssl") or {}
+    protocoles = ssl_res.get("protocoles") or []
+    if protocoles:
+        obsoletes = ssl_res.get("protocoles_obsoletes") or []
+        ligne = f"Protocoles TLS acceptés : {', '.join(protocoles)}"
+        ligne += (f" — dont {', '.join(obsoletes)}, dépréciés (RFC 8996)"
+                  if obsoletes else " (aucun déprécié)")
+        lignes.append(ligne + SAUT)
+
+    return "".join(lignes)
+
+
 def _reputation_summary(results: dict) -> str:
     rep = results.get("reputation")
     if not rep or rep.get("score") is None:
@@ -873,6 +911,7 @@ def _generate_simple_explanation(scan: dict) -> str:
             f"{_headers_summary(results)}"
             f"{_ports_summary(results)}"
             f"{_reputation_summary(results)}"
+            f"{_surface_summary(results)}"
             f"CVE détectées ({len(cves)}) dont {len(cve_critical)} CRITIQUE et {len(cve_high)} HAUT :\n{cve_str}\n"
             f"Problèmes détectés :\n{issues_str}\n\n"
             "RÈGLES :\n"
@@ -882,6 +921,9 @@ def _generate_simple_explanation(scan: dict) -> str:
             "  réseau et réputation. Cite ceux qui l'ont réellement fait baisser.\n"
             "- Un port de base de données ou d'administration ouvert, et un\n"
             "  signalement de réputation, sont aussi graves qu'une CVE : ne les omets pas.\n"
+            "- Un sous-domaine hors production exposé mérite d'être cité : c'est un\n"
+            "  actif que l'organisation a souvent oublié.\n"
+            "- TLS 1.0 ou 1.1 accepté se corrige côté serveur, en les désactivant.\n"
             "- Si IP privée, explique que cet outil analyse des actifs publics.\n"
             "- Français simple, 6 à 9 phrases max, sans jargon. Tutoie le lecteur."
         )

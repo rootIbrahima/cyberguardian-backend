@@ -940,6 +940,65 @@ def _section_synthese(pdf: CyberGuardianPDF, scan: dict):
         pdf.kv_row("Dernière mise à jour", str(info.get("updated_at") or "-"))
 
 
+def _section_surface(pdf: CyberGuardianPDF, scan: dict):
+    """Surface exposée : sous-domaines découverts et protocoles TLS tolérés.
+
+    Ces deux relevés répondent à des questions que le reste du rapport ne pose
+    pas. Le premier nomme des actifs que l'organisation a souvent oubliés ; le
+    second dit ce que le serveur accepte d'un client peu exigeant, là où la
+    section TLS ne rapporte que la version négociée avec un navigateur récent."""
+    results = scan.get("results", {})
+    sd      = results.get("subdomains") or {}
+    ssl_res = results.get("ssl") or {}
+    protocoles = ssl_res.get("protocoles") or []
+
+    if not sd.get("total") and not protocoles:
+        return
+
+    pdf.section_title("Surface exposée")
+
+    if protocoles:
+        obsoletes = ssl_res.get("protocoles_obsoletes") or []
+        pdf.kv_row("Protocoles TLS acceptés", ", ".join(protocoles),
+                   RED if obsoletes else GREEN)
+        if obsoletes:
+            pdf.kv_row("Dont dépréciés", ", ".join(obsoletes), RED)
+            pdf.paragraphe(
+                "Dépréciés depuis 2021 par la RFC 8996 et refusés par PCI-DSS. Le "
+                "serveur propose aussi des versions récentes, mais un client peut "
+                "choisir l'ancienne : le risque pèse alors sur lui. La correction "
+                "consiste à les désactiver côté serveur.",
+                taille=8.5, couleur=GRAY_MID)
+
+    if sd.get("total"):
+        sensibles = sd.get("sensibles") or []
+        pdf.kv_row("Sous-domaines découverts", str(sd["total"]))
+        pdf.kv_row("Source", sd.get("source") or "-", GRAY_MID)
+        pdf.paragraphe(
+            "Relevés dans les journaux publics de transparence des certificats. "
+            "Aucun paquet n'a été émis vers ces hôtes : la source est déclarative, "
+            "tout certificat émis y étant inscrit.",
+            taille=8.5, couleur=GRAY_MID)
+
+        if sensibles:
+            pdf.kv_row("Hors production", str(len(sensibles)), ORANGE)
+            for entree in sensibles[:12]:
+                pdf.kv_row("   " + str(entree.get("hote", "")),
+                           str(entree.get("motif", "")), ORANGE)
+            if len(sensibles) > 12:
+                pdf.paragraphe("... et " + str(len(sensibles) - 12) + " autre(s).",
+                               taille=8.5, couleur=GRAY_MID)
+            pdf.paragraphe(
+                "Ces hôtes portent souvent des données réelles avec des protections "
+                "moindres : mot de passe par défaut, absence de limitation de débit, "
+                "versions non corrigées. Restreignez-y l'accès ou retirez-les.",
+                taille=8.5, couleur=GRAY_MID)
+        else:
+            pdf.paragraphe(
+                "Aucun nom ne trahit un environnement hors production.",
+                taille=8.5, couleur=GRAY_MID)
+
+
 def _section_plan(pdf: CyberGuardianPDF, scan: dict):
     pdf.chapitre("5.  Plan de remédiation")
     pdf.paragraphe(
@@ -1068,6 +1127,7 @@ def generate_scan_pdf(scan: dict, ai_explanation: str = "") -> bytes:
         _section_github(pdf, scan)
     else:
         _section_ssl(pdf, scan)
+        _section_surface(pdf, scan)
 
     _section_plan(pdf, scan)
     _section_annexes(pdf)
