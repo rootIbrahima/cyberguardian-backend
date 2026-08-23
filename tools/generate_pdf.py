@@ -812,12 +812,15 @@ def _section_methodologie(pdf: CyberGuardianPDF, scan: dict):
     else:
         controles = [
             ("Authentification email", "SPF, DKIM, DMARC et DNSSEC dans les enregistrements DNS publics"),
-            ("Chiffrement du trafic",  "Certificat TLS, version du protocole et suite de chiffrement"),
+            ("Chiffrement du trafic",  "Certificat TLS, suite de chiffrement, et versions du "
+                                       "protocole acceptées, éprouvées une par une"),
             ("En-têtes HTTP",          "Six en-têtes de sécurité recommandés par l'OWASP"),
             ("Ports réseau",           "Connexion TCP simple sur une sélection de ports courants"),
             ("Vulnérabilités connues", "CVE liées au serveur exposé, croisées CVSS et EPSS"),
             ("Réputation",             "VirusTotal et AbuseIPDB, listes noires et signalements"),
             ("Identité du domaine",    "Registre WHOIS : propriétaire et échéance"),
+            ("Sous-domaines exposés",  "Journaux publics de transparence des certificats, "
+                                       "sans aucune sollicitation des hôtes découverts"),
         ]
     for nom, detail in controles:
         pdf.kv_row(nom, detail)
