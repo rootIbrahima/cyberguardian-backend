@@ -16,6 +16,8 @@ est signalé intégralement, faute de point de comparaison.
 
 from dataclasses import dataclass
 
+from tools.check_ssl import DUREE_COURTE
+
 # En deçà de dix points sur cent, l'écart relève autant de la variation de
 # mesure (délai réseau sur un port, moteur de réputation indisponible) que
 # d'une dégradation réelle : alerter dessus reviendrait à alerter sur du bruit.
@@ -23,7 +25,13 @@ SEUIL_CHUTE_SCORE = 10
 
 # Paliers d'expiration du certificat, du plus urgent au plus lointain. L'ordre
 # compte : c'est le premier palier franchi qui donne sa gravité à l'alerte.
-PALIERS_SSL = ((7, "critique"), (14, "haute"), (30, "moyenne"))
+#
+# Deux jeux, selon que le certificat est renouvelé à la main ou par un automate.
+# Un certificat de quatre-vingt-dix jours passe sous les trente jours restants à
+# chaque cycle sans que rien n'aille mal : lui appliquer le préavis long
+# reviendrait à alerter tous les quatre-vingts jours sur la majorité du web.
+PALIERS_SSL       = ((7, "critique"), (14, "haute"), (30, "moyenne"))
+PALIERS_SSL_COURT = ((3, "critique"),)
 
 # Les sévérités n'ont pas la même langue selon leur origine : check_ports les
 # produit en français pour l'affichage, les CVE arrivent en anglais du NVD. Les
@@ -84,6 +92,15 @@ def _cves_graves(scan: dict | None) -> dict[str, dict]:
 
 def _jours_ssl(scan: dict | None) -> int | None:
     return (_resultats(scan).get("ssl") or {}).get("days_until_expiry")
+
+
+def _paliers_ssl(scan: dict) -> tuple:
+    """Paliers applicables, selon la durée de vie du certificat observé.
+
+    Les scans antérieurs à l'enregistrement de cette durée conservent le préavis
+    long : mieux vaut une alerte de trop qu'un certificat expiré en silence."""
+    duree = (_resultats(scan).get("ssl") or {}).get("duree_validite")
+    return PALIERS_SSL_COURT if duree and duree <= DUREE_COURTE else PALIERS_SSL
 
 
 def _reputation_signalee(scan: dict | None) -> str:
@@ -225,7 +242,7 @@ def _alertes_ssl(precedent: dict | None, courant: dict) -> list[Alerte]:
                       "vos visiteurs. Renouvelez le certificat sans attendre.",
         )]
 
-    for palier, gravite in PALIERS_SSL:
+    for palier, gravite in _paliers_ssl(courant):
         if jours <= palier and (avant is None or avant > palier):
             return [Alerte(
                 type    = "ssl",

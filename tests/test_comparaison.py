@@ -21,14 +21,14 @@ from services.comparaison import comparer, resumer                            # 
 
 
 def scan(score=90, ports=None, secrets=None, cves=None, jours_ssl=200,
-         reputation=None, bareme=None) -> dict:
+         reputation=None, bareme=None, duree_ssl=None) -> dict:
     """Scan minimal, à la forme de Scan.to_dict(), pour n'exposer dans chaque
     test que le champ dont il parle."""
     resultats = {
         "ports":      {"open_ports": ports or []},
         "trufflehog": {"findings":   secrets or []},
         "cves":       cves or [],
-        "ssl":        {"days_until_expiry": jours_ssl},
+        "ssl":        {"days_until_expiry": jours_ssl, "duree_validite": duree_ssl},
         "reputation": reputation or {},
     }
     if bareme:
@@ -217,3 +217,35 @@ def test_titre_porte_la_gravite_maximale():
 
 def test_resume_vide_sans_alerte():
     assert resumer("ec2lt.sn", []) == ("", "")
+
+
+# ── Durée de vie du certificat ────────────────────────────────────────────────
+
+def test_certificat_court_ne_previent_pas_a_trente_jours():
+    """Un certificat de 90 jours passe sous les 30 restants à chaque cycle sans
+    que rien n'aille mal : facebook.com et google.com vivent ainsi en
+    permanence. Alerter là-dessus reviendrait à le faire tous les 80 jours sur
+    la majeure partie du web."""
+    assert comparer(scan(jours_ssl=45, duree_ssl=90),
+                    scan(jours_ssl=25, duree_ssl=90)) == []
+
+
+def test_certificat_court_previent_a_trois_jours():
+    """À ce stade, le renouvellement automatique a eu sa chance et ne l'a pas
+    saisie : il reste de quoi intervenir à la main."""
+    alertes = comparer(scan(jours_ssl=5, duree_ssl=90),
+                       scan(jours_ssl=2, duree_ssl=90))
+    assert types(alertes) == {"ssl"}
+    assert alertes[0].gravite == "critique"
+
+
+def test_certificat_long_conserve_le_preavis_de_trente_jours():
+    """Renouvelé à la main, il demande un préavis que personne ne peut deviner."""
+    assert types(comparer(scan(jours_ssl=45, duree_ssl=365),
+                          scan(jours_ssl=25, duree_ssl=365))) == {"ssl"}
+
+
+def test_duree_inconnue_conserve_le_preavis_long():
+    """Scans antérieurs à l'enregistrement de la durée : une alerte de trop vaut
+    mieux qu'un certificat expiré en silence."""
+    assert types(comparer(scan(jours_ssl=45), scan(jours_ssl=25))) == {"ssl"}

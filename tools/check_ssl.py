@@ -25,6 +25,34 @@ class SSLResult:
     score: int = 0          # 0-25 pts (poids SSL dans le score global)
     issues: list[dict] = field(default_factory=list)
     error: Optional[str] = None
+    # Durée totale de validité, en jours. Elle distingue un certificat à
+    # renouvellement automatique — 90 jours chez Let's Encrypt comme chez les
+    # grands hébergeurs — d'un certificat annuel renouvelé à la main. Sans elle,
+    # sept jours restants se lisent de la même façon dans les deux cas, alors
+    # qu'ils sont normaux pour l'un et alarmants pour l'autre.
+    duree_validite: Optional[int] = None
+
+
+# Au-delà d'une durée courte, un certificat est renouvelé à la main et trente
+# jours de préavis sont utiles. En deçà, il est piloté par un automate : alerter
+# à trente jours signalerait le fonctionnement normal, tous les quatre-vingts
+# jours, sur la majorité du web.
+#
+# Le préavis court vaut trois jours et non sept : facebook.com et google.com
+# vivent à sept jours de leur échéance en permanence, avec un renouvellement qui
+# fonctionne. À trois jours, toute automatisation a eu sa chance, et il reste de
+# quoi intervenir à la main. Un scanner concurrent classe ce cas en anomalie sur
+# facebook.com ; il le fera tous les quatre-vingt-trois jours, indéfiniment.
+DUREE_COURTE  = 100
+PREAVIS_LONG  = 30
+PREAVIS_COURT = 3
+
+
+def seuil_expiration(duree_validite: int | None) -> int:
+    """Nombre de jours restants à partir duquel l'expiration mérite un signalement."""
+    if duree_validite and duree_validite <= DUREE_COURTE:
+        return PREAVIS_COURT
+    return PREAVIS_LONG
 
 
 def check_ssl(target: str, port: int = 443, timeout: int = 10) -> SSLResult:
@@ -70,6 +98,11 @@ def check_ssl(target: str, port: int = 443, timeout: int = 10) -> SSLResult:
                     result.expiry_date = expiry_dt.strftime("%d/%m/%Y")
                     result.days_until_expiry = (expiry_dt - datetime.datetime.utcnow()).days
                     result.expired = result.days_until_expiry < 0
+
+                    not_before = cert.get("notBefore")
+                    if not_before:
+                        emission = datetime.datetime.strptime(not_before, "%b %d %H:%M:%S %Y %Z")
+                        result.duree_validite = (expiry_dt - emission).days
 
     except ssl.SSLCertVerificationError as e:
         result.reachable = True
@@ -136,12 +169,20 @@ def _detect_issues(r: SSLResult) -> list[dict]:
             "desc": f"Le certificat a expiré il y a {abs(r.days_until_expiry)} jours. Les navigateurs bloquent l'accès.",
             "tool": "check_ssl()",
         })
-    elif r.days_until_expiry is not None and r.days_until_expiry <= 30:
+    elif r.days_until_expiry is not None and r.days_until_expiry <= seuil_expiration(r.duree_validite):
+        # Le libellé dit pourquoi c'est anormal : sur un certificat court, le
+        # renouvellement automatique aurait dû avoir lieu et ne l'a pas fait.
+        automatique = (r.duree_validite or 0) and r.duree_validite <= DUREE_COURTE
+        desc = ("Le renouvellement automatique aurait dû intervenir : vérifiez "
+                "qu'il fonctionne encore."
+                if automatique else
+                "Renouvelez le certificat avant expiration pour éviter une "
+                "interruption de service.")
         issues.append({
             "severity": "HAUT",
             "color": "orange",
             "title": f"Certificat expire dans {r.days_until_expiry} jours",
-            "desc": "Renouvelez le certificat avant expiration pour éviter une interruption de service.",
+            "desc": desc,
             "tool": "check_ssl()",
         })
 
