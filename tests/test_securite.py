@@ -192,3 +192,33 @@ def test_webhook_accepte_le_bon_secret(client_webhook, monkeypatch):
     reponse = client.post("/telegram/webhook", json={"message": {}},
                           headers={"X-Telegram-Bot-Api-Secret-Token": "secret-de-test"})
     assert reponse.status_code == 200
+
+
+# ── Périmètre d'une URL : le chemin sert, l'hôte reste maître ─────────────────
+
+from tools.scan_headers import _chemin                                        # noqa: E402
+
+
+@pytest.mark.parametrize("cible,attendu", [
+    ("ec2lt.sn",                          ""),
+    ("https://ec2lt.sn",                  ""),
+    ("https://ec2lt.sn/",                 "/"),
+    ("https://ec2lt.sn/admin/login?a=1",  "/admin/login?a=1"),
+    ("http://ec2lt.sn:8080/x/y",          "/x/y"),
+    ("102.36.139.9",                      ""),
+])
+def test_chemin_extrait_de_l_url(cible, attendu):
+    """Le chemin n'est exploité que par le contrôle des en-têtes : eux seuls
+    peuvent différer d'une page à l'autre."""
+    assert _chemin(cible) == attendu
+
+
+@pytest.mark.parametrize("cible", [
+    "https://ec2lt.sn/admin",
+    "http://ec2lt.sn:8080/x",
+    "ec2lt.sn",
+])
+def test_l_hote_ne_depend_jamais_du_chemin(cible):
+    """Garde-fou : quel que soit le chemin soumis, la cible réseau reste l'hôte
+    validé. Sans cela, un chemin pourrait servir à viser autre chose."""
+    assert extraire_hote(cible) == "ec2lt.sn"

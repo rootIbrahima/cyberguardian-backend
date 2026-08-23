@@ -814,7 +814,8 @@ def _section_methodologie(pdf: CyberGuardianPDF, scan: dict):
             ("Authentification email", "SPF, DKIM, DMARC et DNSSEC dans les enregistrements DNS publics"),
             ("Chiffrement du trafic",  "Certificat TLS, suite de chiffrement, et versions du "
                                        "protocole acceptées, éprouvées une par une"),
-            ("En-têtes HTTP",          "Six en-têtes de sécurité recommandés par l'OWASP"),
+            ("En-têtes HTTP",          "Six en-têtes recommandés par l'OWASP, relevés sur la "
+                                       "page demandée lorsqu'une URL complète a été soumise"),
             ("Ports réseau",           "Connexion TCP simple sur une sélection de ports courants"),
             ("Vulnérabilités connues", "CVE liées au serveur exposé, croisées CVSS et EPSS"),
             ("Réputation",             "VirusTotal et AbuseIPDB, listes noires et signalements"),

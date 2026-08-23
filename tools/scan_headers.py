@@ -59,16 +59,36 @@ class HeadersResult:
     error: Optional[str] = None
 
 
+def _chemin(target: str) -> str:
+    """Chemin et paramètres d'une URL, chaîne vide pour un simple nom d'hôte.
+
+    Les en-têtes de sécurité sont posés par l'application, pas par le serveur :
+    ils peuvent différer entre la racine et une page interne. Un client qui
+    soumet https://site.sn/application demande l'analyse de cette page, et
+    ramener la requête à la racine lui répondrait à côté.
+
+    Seul ce contrôle exploite le chemin. Un certificat, des ports ouverts ou un
+    enregistrement DNS ne dépendent pas de l'URL demandée : les y soumettre
+    n'aurait pas de sens."""
+    reste = (target or "").strip()
+    for prefixe in ("https://", "http://"):
+        if reste.startswith(prefixe):
+            reste = reste[len(prefixe):]
+    separateur = reste.find("/")
+    return reste[separateur:] if separateur != -1 else ""
+
+
 def scan_headers(target: str, timeout: int = 10) -> HeadersResult:
     # Le port est conservé : il fait partie de l'URL reconstruite ci-dessous.
     host = extraire_hote(target, garder_port=True)
-    result = HeadersResult(target=host)
+    chemin = _chemin(target)
+    result = HeadersResult(target=host + chemin)
 
     resp = None
     for scheme in ("https", "http"):
         try:
             resp = httpx.get(
-                f"{scheme}://{host}",
+                f"{scheme}://{host}{chemin}",
                 timeout=timeout,
                 follow_redirects=True,
                 # Volontaire : les sites au certificat invalide sont précisément

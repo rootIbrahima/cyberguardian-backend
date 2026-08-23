@@ -81,7 +81,11 @@ def scan_http_headers(target: str) -> dict:
     X-Frame-Options, X-Content-Type-Options, Referrer-Policy,
     Permissions-Policy. Ces en-têtes protègent contre le XSS, le clickjacking
     et le SSL stripping. Score sur 20 points avec recommandations pour chaque
-    en-tête manquant."""
+    en-tête manquant.
+
+    Si la cible est une URL complète, le chemin est conservé : les en-têtes
+    sont posés par l'application et peuvent différer d'une page à l'autre.
+    """
     return asdict(_scan_headers(target))
 
 
