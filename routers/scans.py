@@ -23,6 +23,8 @@ from tools.check_cve import check_tls_cves, check_service_cves
 from tools.scan_headers import scan_headers
 from tools.check_ports import check_ports
 from tools.check_reputation import check_reputation
+from tools.check_subdomains import check_subdomains
+from tools.owasp import annoter
 from tools.target_guard import resoudre_et_valider, CibleInterdite
 from tools.calculate_score import calculate_score
 from tools.generate_pdf import generate_scan_pdf
@@ -181,6 +183,8 @@ def _executer_scan(scan_id: int, target: str, asset_type: str,
                 "self_signed":       ssl.self_signed,
                 "days_until_expiry": ssl.days_until_expiry,
                 "duree_validite":    ssl.duree_validite,
+                "protocoles":        ssl.protocoles_acceptes,
+                "protocoles_obsoletes": ssl.protocoles_obsoletes,
                 "expiry_date":       ssl.expiry_date,
                 "issued_to":         ssl.issued_to,
                 "issued_by":         ssl.issued_by,
@@ -225,6 +229,14 @@ def _executer_scan(scan_id: int, target: str, asset_type: str,
                 whois = check_whois(target)
                 results["whois"] = asdict(whois)
                 issues = issues + whois.issues
+
+                # Sous-domaines exposés, lus dans les journaux de transparence
+                # des certificats. Aucun paquet n'est envoyé vers ces hôtes, et
+                # le score n'en dépend pas : l'étendue d'une surface n'est pas
+                # un défaut, seuls les hôtes hors production le sont.
+                sousdomaines = check_subdomains(target)
+                results["subdomains"] = asdict(sousdomaines)
+                issues = issues + sousdomaines.issues
 
             score_detail            = calculate_score(score_parts)
             results["score_detail"] = score_detail
@@ -284,6 +296,10 @@ def _executer_scan(scan_id: int, target: str, asset_type: str,
             return   # supprimé pendant l'analyse
         scan.score   = total_score
         scan.status  = "completed"
+        # Rattachement au Top 10 de l'OWASP, appliqué une fois pour toutes les
+        # branches : un constat parle à un ingénieur, sa catégorie parle à un
+        # auditeur et permet de comparer deux rapports d'outils différents.
+        issues = annoter(issues)
         scan.vulns   = len(issues)
         scan.cve     = len(all_cves)
         scan.results = results

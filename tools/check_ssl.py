@@ -31,6 +31,11 @@ class SSLResult:
     # sept jours restants se lisent de la même façon dans les deux cas, alors
     # qu'ils sont normaux pour l'un et alarmants pour l'autre.
     duree_validite: Optional[int] = None
+    # Protocoles réellement acceptés par le serveur. La version négociée ne dit
+    # rien de ce qu'il tolère par ailleurs : facebook.com et google.com
+    # négocient TLS 1.3 tout en acceptant encore TLS 1.0, mesuré.
+    protocoles_acceptes: list[str] = field(default_factory=list)
+    protocoles_obsoletes: list[str] = field(default_factory=list)
 
 
 # Au-delà d'une durée courte, un certificat est renouvelé à la main et trente
@@ -53,6 +58,46 @@ def seuil_expiration(duree_validite: int | None) -> int:
     if duree_validite and duree_validite <= DUREE_COURTE:
         return PREAVIS_COURT
     return PREAVIS_LONG
+
+
+# Protocoles éprouvés un par un. TLS 1.0 et 1.1 sont dépréciés depuis 2021
+# (RFC 8996) et refusés par PCI-DSS : les accepter expose les clients qui les
+# choisissent à BEAST et aux attaques par repli.
+_PROTOCOLES = (
+    ("TLS 1.0", ssl.TLSVersion.TLSv1,   True),
+    ("TLS 1.1", ssl.TLSVersion.TLSv1_1, True),
+    ("TLS 1.2", ssl.TLSVersion.TLSv1_2, False),
+    ("TLS 1.3", ssl.TLSVersion.TLSv1_3, False),
+)
+
+
+def protocoles_acceptes(hote: str, port: int = 443, timeout: int = 6) -> tuple[list, list]:
+    """Éprouve chaque version du protocole. Rend (acceptés, obsolètes acceptés).
+
+    Une poignée de main est ouverte puis refermée aussitôt, sans requête : le
+    serveur n'a rien à traiter et rien n'est journalisé côté applicatif."""
+    acceptes, obsoletes = [], []
+    for nom, version, deprecie in _PROTOCOLES:
+        contexte = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        contexte.check_hostname = False
+        contexte.verify_mode = ssl.CERT_NONE
+        try:
+            contexte.minimum_version = version
+            contexte.maximum_version = version
+            # Le client doit accepter les suites anciennes, sinon le refus
+            # viendrait de nous et non du serveur : la mesure serait fausse.
+            contexte.set_ciphers("ALL:@SECLEVEL=0")
+        except (ValueError, ssl.SSLError):
+            continue          # version désactivée dans l'OpenSSL local
+        try:
+            with socket.create_connection((hote, port), timeout=timeout) as brut:
+                with contexte.wrap_socket(brut, server_hostname=hote):
+                    acceptes.append(nom)
+                    if deprecie:
+                        obsoletes.append(nom)
+        except Exception:
+            continue          # refus du serveur : c'est le résultat attendu
+    return acceptes, obsoletes
 
 
 def check_ssl(target: str, port: int = 443, timeout: int = 10) -> SSLResult:
@@ -103,6 +148,12 @@ def check_ssl(target: str, port: int = 443, timeout: int = 10) -> SSLResult:
                     if not_before:
                         emission = datetime.datetime.strptime(not_before, "%b %d %H:%M:%S %Y %Z")
                         result.duree_validite = (expiry_dt - emission).days
+
+        # Éventail des protocoles tolérés, mesuré séparément : la poignée de
+        # main ci-dessus ne révèle que la version négociée, jamais celles que
+        # le serveur accepterait d'un client moins exigeant.
+        (result.protocoles_acceptes,
+         result.protocoles_obsoletes) = protocoles_acceptes(hostname, port)
 
     except ssl.SSLCertVerificationError as e:
         result.reachable = True
@@ -184,6 +235,18 @@ def _detect_issues(r: SSLResult) -> list[dict]:
             "title": f"Certificat expire dans {r.days_until_expiry} jours",
             "desc": desc,
             "tool": "check_ssl()",
+        })
+
+    if r.protocoles_obsoletes:
+        issues.append({
+            "severity": "HAUT",
+            "color": "orange",
+            "title": "Protocole obsolète accepté : " + ", ".join(r.protocoles_obsoletes),
+            "desc": "Dépréciés depuis 2021 (RFC 8996) et refusés par PCI-DSS. Un client "
+                    "qui les choisit s'expose à BEAST et aux attaques par repli, même si "
+                    "le serveur propose aussi TLS 1.3. À désactiver côté serveur.",
+            "tool": "check_ssl()",
+            "owasp": "A02:2021 - Cryptographic Failures",
         })
 
     if r.self_signed:

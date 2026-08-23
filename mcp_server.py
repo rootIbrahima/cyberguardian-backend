@@ -27,6 +27,8 @@ from tools.check_cve import check_service_cves as _check_service_cves
 from tools.scan_headers import scan_headers as _scan_headers
 from tools.check_ports import check_ports as _check_ports
 from tools.check_reputation import check_reputation as _check_reputation
+from tools.check_subdomains import check_subdomains as _check_subdomains
+from tools.check_ssl import protocoles_acceptes as _protocoles_acceptes
 from tools.target_guard import resoudre_et_valider as _valider_cible
 from tools.target_guard import CibleInterdite
 from tools.calculate_score import calculate_score as _calculate_score
@@ -146,6 +148,38 @@ def check_ssl_certificate(target: str) -> dict:
     SANs. Retourne aussi une note (A+ à F), un score sur 25 points et la liste
     des problèmes détectés avec leur sévérité."""
     return asdict(_check_ssl(target))
+
+
+@mcp.tool
+def enumerate_subdomains(domain: str) -> dict:
+    """Recense les sous-domaines exposés d'un domaine, en lisant les journaux
+    publics de transparence des certificats (certSpotter, repli sur crt.sh).
+
+    Aucun paquet n'est envoyé vers les hôtes découverts : la source est
+    déclarative, tout certificat émis y étant inscrit. Signale séparément les
+    sous-domaines dont le nom trahit un environnement hors production — dev,
+    staging, admin, interne — qui portent souvent des données réelles avec des
+    protections moindres."""
+    return asdict(_check_subdomains(domain))
+
+
+@mcp.tool
+def check_tls_protocols(target: str, port: int = 443) -> dict:
+    """Éprouve chaque version du protocole TLS acceptée par un serveur.
+
+    La version négociée lors d'une connexion ordinaire ne dit rien de ce que le
+    serveur tolère d'un client moins exigeant : facebook.com et google.com
+    négocient TLS 1.3 tout en acceptant encore TLS 1.0. Une poignée de main est
+    ouverte puis refermée pour chaque version, sans aucune requête."""
+    acceptes, obsoletes = _protocoles_acceptes(target, port)
+    return {
+        "target": target,
+        "acceptes": acceptes,
+        "obsoletes": obsoletes,
+        "conforme": not obsoletes,
+        "note": ("TLS 1.0 et 1.1 sont dépréciés depuis 2021 (RFC 8996) et refusés "
+                 "par PCI-DSS." if obsoletes else "Aucun protocole déprécié accepté."),
+    }
 
 
 # ── CVE : configuration TLS et service exposé ────────────────────────────────
