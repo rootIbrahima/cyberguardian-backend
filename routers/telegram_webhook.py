@@ -30,6 +30,7 @@ from database import get_db, SessionLocal
 from models import Scan, TelegramMessage
 from config import (OLLAMA_URL, OLLAMA_KEY, OLLAMA_MODEL, OLLAMA_KEEP_ALIVE,
                     TELEGRAM_WEBHOOK_SECRET)
+from services.modele import generer
 from services.telegram_liaison import (
     verifier_code_et_lier,
     get_user_par_chat_id,
@@ -321,19 +322,9 @@ def _repondre_ia(chat_id: str, user_id: int, question: str):
             "Écris en texte simple, sans formatage Markdown ni astérisques.\n"
             f"Nouvelle question : {question}"
         )
-        try:
-            resp = httpx.post(
-                f"{OLLAMA_URL}/api/generate",
-                headers={"Authorization": f"Bearer {OLLAMA_KEY}"},
-                json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "keep_alive": OLLAMA_KEEP_ALIVE,
-                      "think": False,
-                      "options": {"num_predict": 500, "temperature": 0.6}},
-                timeout=httpx.Timeout(connect=15.0, read=180.0, write=15.0, pool=5.0),
-            )
-            resp.raise_for_status()
-            answer = (resp.json().get("response") or "").strip()
-        except Exception:
-            answer = ""
+        # Repli automatique vers le fournisseur de secours si le serveur
+        # d'inférence ne répond pas, voir services.modele.
+        answer = generer(prompt, jetons=500)
 
         if not answer:
             answer = ("Le service d'analyse est momentanément indisponible. "

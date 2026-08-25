@@ -15,6 +15,7 @@ from models import Conversation, Scan, User
 from auth import get_current_user
 from routers.notifications import creer_notification
 from services.comparaison import comparer, resumer
+from services.modele import generer, generer_flux
 from tools.check_dns import check_dns
 from tools.check_whois import check_whois
 from tools.check_epss import enrich_cves
@@ -653,30 +654,17 @@ def ask_ai(
         )
 
     def stream():
+        # Le repli d'une source à l'autre est porté par services.modele. Il
+        # n'a lieu qu'avant le premier jeton : basculer en cours de route
+        # coudrait deux débuts de réponse l'un à l'autre, ce qui se voit.
         tokens = []
         try:
-            with httpx.stream(
-                "POST",
-                f"{OLLAMA_URL}/api/generate",
-                headers={"Authorization": f"Bearer {OLLAMA_KEY}"},
-                json={"model": OLLAMA_MODEL, "prompt": context, "stream": True, "keep_alive": OLLAMA_KEEP_ALIVE,
-                      "think": False,   # qwen3.6 : pas de raisonnement parasite dans le flux
-                      "options": {"num_predict": 500, "temperature": 0.6}},
-                timeout=httpx.Timeout(connect=15.0, read=180.0, write=15.0, pool=5.0),
-            ) as resp:
-                resp.raise_for_status()
-                for line in resp.iter_lines():
-                    if not line:
-                        continue
-                    data  = json.loads(line)
-                    token = data.get("response", "")
-                    if token:
-                        tokens.append(token)
-                        yield f"data: {json.dumps({'token': token})}\n\n"
-                    if data.get("done"):
-                        answer = "".join(tokens)
-                        _save_conversation(scan_id, body.question, answer)
-                        yield f"data: {json.dumps({'done': True})}\n\n"
+            for token in generer_flux(context, jetons=500):
+                tokens.append(token)
+                yield f"data: {json.dumps({'token': token})}\n\n"
+            answer = "".join(tokens)
+            _save_conversation(scan_id, body.question, answer)
+            yield f"data: {json.dumps({'done': True})}\n\n"
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -928,23 +916,7 @@ def _generate_simple_explanation(scan: dict) -> str:
             "- Français simple, 6 à 9 phrases max, sans jargon. Tutoie le lecteur."
         )
 
-    try:
-        resp = httpx.post(
-            f"{OLLAMA_URL}/api/generate",
-            headers={"Authorization": f"Bearer {OLLAMA_KEY}"},
-            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False, "keep_alive": OLLAMA_KEEP_ALIVE,
-                  "think": False,   # qwen3.6 : réponse directe sans raisonnement
-                  # La consigne demande 6 à 9 phrases, mesurées entre 255 et 370
-                  # jetons. Le plafond de 600 n'ajoutait aucun texte, seulement
-                  # du temps d'attente dans le pire cas.
-                  "options": {"num_predict": 400, "temperature": 0.6}},
-            # Le serveur d'inférence est mutualisé : le même prompt a été
-            # chronométré à 28 s puis à 139 s. Un délai de 60 s coupait la
-            # génération et le rapport arrivait vide, sans trace.
-            timeout=httpx.Timeout(connect=15.0, read=180.0, write=15.0, pool=5.0),
-        )
-        resp.raise_for_status()
-        return _couper_a_la_phrase(resp.json().get("response", ""))
-    except Exception as e:
-        print(f"  [!] rapport rédigé indisponible pour {scan.get('target')} : {e}")
-        return ""
+    # Le repli sur un fournisseur externe se fait dans services.modele : deux
+    # pannes prolongées du serveur mutualisé ont laissé les rapports sans
+    # analyse rédigée, alors que le reste du scan aboutissait normalement.
+    return _couper_a_la_phrase(generer(prompt, jetons=400))

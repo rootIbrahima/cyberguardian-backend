@@ -27,6 +27,22 @@ try:
 except ValueError:
     OLLAMA_KEEP_ALIVE = _keep_alive
 
+# Modèle de secours, sollicité uniquement lorsque le serveur d'inférence de
+# l'UN-CHK ne répond pas. Il parle le dialecte OpenAI, que presque tous les
+# fournisseurs exposent, si bien qu'on change de fournisseur sans toucher au
+# code. Exemples d'URL :
+#     Mistral   https://api.mistral.ai/v1          mistral-small-latest
+#     Groq      https://api.groq.com/openai/v1     llama-3.3-70b-versatile
+#     Gemini    https://generativelanguage.googleapis.com/v1beta/openai
+#     OpenAI    https://api.openai.com/v1          gpt-4o-mini
+#
+# Laissé vide, le comportement est inchangé : source première seule. Les invites
+# portent les ports ouverts et les secrets exposés de nos clients ; ces données
+# ne quittent le pays qu'en cas de panne, jamais par défaut.
+LLM_SECOURS_URL   = os.getenv("LLM_SECOURS_URL", "").rstrip("/")
+LLM_SECOURS_KEY   = os.getenv("LLM_SECOURS_KEY", "")
+LLM_SECOURS_MODEL = os.getenv("LLM_SECOURS_MODEL", "")
+
 # Plafond de scans par cible et par 24 h (CDC §7.1). 0 désactive la limite.
 QUOTA_SCANS_PAR_CIBLE = int(os.getenv("QUOTA_SCANS_PAR_CIBLE", "0"))
 
