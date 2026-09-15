@@ -222,3 +222,29 @@ def test_l_hote_ne_depend_jamais_du_chemin(cible):
     """Garde-fou : quel que soit le chemin soumis, la cible réseau reste l'hôte
     validé. Sans cela, un chemin pourrait servir à viser autre chose."""
     assert extraire_hote(cible) == "ec2lt.sn"
+
+
+# ── Outils MCP : le garde-fou couvre tout ce qui sort vers la cible ───────────
+
+import mcp_server                                                           # noqa: E402
+
+# Les outils qui ouvrent une connexion vers la cible, plus la réputation, qui
+# transmet la cible à des services tiers. Un serveur MCP non protégé ferait du
+# modèle un relais vers le réseau interne de la machine qui l'exécute.
+OUTILS_MCP_GARDES = [
+    mcp_server.scan_http_headers,
+    mcp_server.scan_network_ports,
+    mcp_server.check_target_reputation,
+    mcp_server.check_ssl_certificate,
+    mcp_server.check_tls_protocols,
+    mcp_server.check_service_cves,
+    mcp_server.analyze_security,
+]
+
+
+@pytest.mark.parametrize("cible", ["127.0.0.1", "169.254.169.254", "192.168.1.1"])
+@pytest.mark.parametrize("outil", OUTILS_MCP_GARDES, ids=lambda o: o.__name__)
+def test_outil_mcp_refuse_une_cible_interne(outil, cible):
+    """Le refus intervient avant toute sollicitation du réseau : ces cibles sont
+    des adresses littérales, aucune résolution DNS n'est nécessaire."""
+    assert "error" in outil(cible)

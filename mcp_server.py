@@ -10,9 +10,9 @@ Lancement (transport STDIO, depuis le dossier backend/) :
 Test interactif avec MCP Inspector :
     npx @modelcontextprotocol/inspector python mcp_server.py
 
-Les douze outils du cahier des charges y sont exposés : DNS, WHOIS, SSL/TLS,
-en-têtes HTTP, ports réseau, réputation, CVE, EPSS, score global, orchestration
-complète et scan de dépôt GitHub.
+Quinze outils y sont exposés : DNS, WHOIS, SSL/TLS, protocoles TLS acceptés,
+en-têtes HTTP, ports réseau, réputation, sous-domaines, CVE, EPSS, score global,
+orchestration complète et scan de dépôt GitHub.
 """
 
 from dataclasses import asdict
@@ -47,6 +47,21 @@ mcp = FastMCP(
         "Pour un repository GitHub public, utiliser scan_github_repo."
     ),
 )
+
+
+def _refuser_si_interne(cible: str) -> dict | None:
+    """Message de refus si la cible désigne une machine interne, None sinon.
+
+    Sans cette vérification, le serveur devient un relais : un modèle induit en
+    erreur par une instruction malveillante lui ferait joindre la boucle locale,
+    un réseau privé ou les métadonnées d'un hébergeur, puis en rapporter le
+    contenu. Tout outil qui ouvre une connexion vers la cible, ou qui transmet
+    celle-ci à un service tiers, l'appelle avant toute sollicitation du réseau."""
+    try:
+        _valider_cible(cible)
+        return None
+    except CibleInterdite as e:
+        return {"error": str(e)}
 
 
 # ── Outil 1 (CDC) : DNS anti-phishing ─────────────────────────────────────────
@@ -86,6 +101,9 @@ def scan_http_headers(target: str) -> dict:
     Si la cible est une URL complète, le chemin est conservé : les en-têtes
     sont posés par l'application et peuvent différer d'une page à l'autre.
     """
+    refus = _refuser_si_interne(target)
+    if refus:
+        return refus
     return asdict(_scan_headers(target))
 
 
@@ -99,10 +117,9 @@ def scan_network_ports(target: str) -> dict:
     PostgreSQL, MongoDB, Redis, Elasticsearch, MSSQL) et web. Signale tout
     service sensible exposé directement sur Internet. Score sur 15 points.
     Nécessite Nmap installé sur le serveur d'analyse."""
-    try:
-        _valider_cible(target)
-    except CibleInterdite as e:
-        return {"error": str(e)}
+    refus = _refuser_si_interne(target)
+    if refus:
+        return refus
     return asdict(_check_ports(target))
 
 
@@ -117,10 +134,9 @@ def check_target_reputation(target: str) -> dict:
     qu'aucune analyse de configuration ne peut détecter. Score sur 15 points.
     Nécessite les clés VIRUSTOTAL_API_KEY et ABUSEIPDB_API_KEY ; sans elles, le
     critère est exclu du score plutôt que compté à zéro."""
-    try:
-        _valider_cible(target)
-    except CibleInterdite as e:
-        return {"error": str(e)}
+    refus = _refuser_si_interne(target)
+    if refus:
+        return refus
     return asdict(_check_reputation(target))
 
 
@@ -151,6 +167,9 @@ def check_ssl_certificate(target: str) -> dict:
     validité, expiration, auto-signature, version TLS, suite de chiffrement,
     SANs. Retourne aussi une note (A+ à F), un score sur 25 points et la liste
     des problèmes détectés avec leur sévérité."""
+    refus = _refuser_si_interne(target)
+    if refus:
+        return refus
     return asdict(_check_ssl(target))
 
 
@@ -175,6 +194,9 @@ def check_tls_protocols(target: str, port: int = 443) -> dict:
     serveur tolère d'un client moins exigeant : facebook.com et google.com
     négocient TLS 1.3 tout en acceptant encore TLS 1.0. Une poignée de main est
     ouverte puis refermée pour chaque version, sans aucune requête."""
+    refus = _refuser_si_interne(target)
+    if refus:
+        return refus
     acceptes, obsoletes = _protocoles_acceptes(target, port)
     return {
         "target": target,
@@ -202,6 +224,9 @@ def check_service_cves(target: str) -> dict:
     """Identifie le serveur web exposé via sa bannière HTTP (en-tête Server)
     puis recherche les CVE connues pour ce logiciel et cette version dans la
     base NVD (NIST). Retourne la bannière détectée et la liste des CVE."""
+    refus = _refuser_si_interne(target)
+    if refus:
+        return refus
     banner, cves = _check_service_cves(target)
     return {"server_banner": banner, "cves": cves}
 
@@ -245,10 +270,9 @@ def analyze_security(target: str) -> dict:
     l'utilisateur demande une analyse ou un audit complet d'une cible."""
     import ipaddress
 
-    try:
-        _valider_cible(target)
-    except CibleInterdite as e:
-        return {"error": str(e)}
+    refus = _refuser_si_interne(target)
+    if refus:
+        return refus
 
     ssl_result = _check_ssl(target)
     headers_result = _scan_headers(target)
