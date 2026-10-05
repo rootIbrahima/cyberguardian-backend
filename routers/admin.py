@@ -3,6 +3,7 @@ Administration : validation des candidatures experts (CNI + diplôme, CDC §4.2)
 statistiques de la plateforme et consultation des pièces justificatives.
 """
 
+import mimetypes
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -191,7 +192,15 @@ def expert_document(
     file = Path(path)
     if not file.exists():
         raise HTTPException(status_code=404, detail="Fichier introuvable sur le serveur")
-    return FileResponse(file, filename=file.name)
+    # Type MIME explicite et disposition « inline » : sans cela le navigateur
+    # traite la pièce comme un téléchargement au lieu de l'afficher.
+    media = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+    return FileResponse(
+        file,
+        media_type=media,
+        filename=file.name,
+        content_disposition_type="inline",
+    )
 
 
 @router.get("/users")
